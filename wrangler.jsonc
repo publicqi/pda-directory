@@ -1,0 +1,7 @@
+{
+    "name": "pda-directory",
+    "compatibility_date": "2025-09-26",
+    "assets": {
+        "directory": "apps/frontend/dist"
+    }
+}

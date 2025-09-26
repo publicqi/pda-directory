@@ -10,9 +10,7 @@
     "dev:backend": "npm run dev --workspace @pda/backend",
     "build": "npm run build --workspace @pda/frontend && npm run build --workspace @pda/backend",
     "build:frontend": "npm run build --workspace @pda/frontend",
-    "build:backend": "npm run build --workspace @pda/backend",
-    "preview": "npm run preview --workspace @pda/frontend",
-    "start:backend": "npm run start --workspace @pda/backend"
+    "build:backend": "npm run build --workspace @pda/backend"
   },
   "devDependencies": {
     "@types/node": "^20.12.7",
