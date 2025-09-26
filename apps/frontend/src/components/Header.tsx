@@ -1,6 +1,7 @@
 import React, { useContext } from 'react';
 import { Link } from 'react-router-dom';
 import { DarkModeContext } from '../contexts/DarkModeContext';
+import StatsDisplay from './StatsDisplay';
 
 const Header = () => {
     const [usingDarkMode, setUsingDarkMode] = useContext(DarkModeContext);
@@ -17,12 +18,16 @@ const Header = () => {
                         </div>
                         <span className="logo-text">PDA Directory</span>
                     </Link>
+                    <div className="header-divider-vertical"></div>
                     <nav className="nav-links">
                         <Link to="/import" className="nav-link">Import</Link>
                     </nav>
                 </div>
 
                 <div className="header-right">
+                    <div className="header-divider-vertical"></div>
+                    <StatsDisplay />
+                    <div className="header-divider-vertical"></div>
                     <a
                         href="https://github.com/publicqi/pda-directory"
                         target="_blank"

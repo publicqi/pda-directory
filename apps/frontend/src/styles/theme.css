@@ -179,6 +179,13 @@ input {
   background: var(--divider);
 }
 
+.header-divider-vertical {
+  width: 1px;
+  height: 24px;
+  background: var(--divider);
+  flex-shrink: 0;
+}
+
 @media (max-width: 768px) {
   .header-container {
     padding: 12px 16px;
@@ -603,5 +610,55 @@ input {
   .search-button {
     align-self: flex-end;
     padding: 8px 16px;
+  }
+}
+
+/* Stats Display */
+.stats-display {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.stats-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.stats-value {
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.stats-label {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.health-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.health-dot.healthy {
+  background-color: #4caf50;
+}
+
+.health-dot.unhealthy {
+  background-color: #f44336;
+}
+
+@media (max-width: 768px) {
+  .stats-display {
+    display: none;
+  }
+
+  .header-divider-vertical {
+    display: none;
   }
 }
