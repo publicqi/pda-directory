@@ -259,14 +259,6 @@ export const createApp = (): Hono<Env> => {
   app.use('*', async (c, next) => {
     const path = c.req.path;
     if (path.startsWith('/api')) {
-      const limiter = c.env.PDA_DIRECTORY_RATE_LIMITER;
-      if (!limiter) {
-        throw new HTTPException(500, { message: 'Rate limit binding PDA_DIRECTORY_RATE_LIMITER is not configured' });
-      }
-      const { success } = await limiter.limit({ key: c.req.raw.headers.get('cf-connecting-ip') ?? '' });
-      if (!success) {
-        throw new HTTPException(429, { message: 'Rate limit exceeded (1 req/s)' });
-      }
       await next();
       return;
     }
@@ -302,6 +294,15 @@ export const createApp = (): Hono<Env> => {
   });
 
   app.post('/api/pda/query', async (c) => {
+    const limiter = c.env.PDA_DIRECTORY_RATE_LIMITER;
+    if (!limiter) {
+      throw new HTTPException(500, { message: 'Rate limit binding PDA_DIRECTORY_RATE_LIMITER is not configured' });
+    }
+    const { success } = await limiter.limit({ key: c.req.raw.headers.get('cf-connecting-ip') ?? '' });
+    if (!success) {
+      throw new HTTPException(429, { message: 'Rate limit exceeded (1 req/s)' });
+    }
+
     const body = await c.req.json();
     const pda = body?.pda;
 
@@ -360,6 +361,15 @@ export const createApp = (): Hono<Env> => {
   });
 
   app.post('/api/pda/list', async (c) => {
+    const limiter = c.env.PDA_DIRECTORY_RATE_LIMITER;
+    if (!limiter) {
+      throw new HTTPException(500, { message: 'Rate limit binding PDA_DIRECTORY_RATE_LIMITER is not configured' });
+    }
+    const { success } = await limiter.limit({ key: c.req.raw.headers.get('cf-connecting-ip') ?? '' });
+    if (!success) {
+      throw new HTTPException(429, { message: 'Rate limit exceeded (1 req/s)' });
+    }
+
     const body = await c.req.json().catch(() => ({}));
     const limitFromBody = body?.limit;
     const offsetFromBody = body?.offset;
