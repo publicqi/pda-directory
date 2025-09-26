@@ -6,6 +6,55 @@ import Header from '../components/Header';
 import PdaEntryCard from '../components/PdaEntryCard';
 import { PdaEntry, ApiResponse } from '../types/api';
 
+// Solana API utility function
+const checkIfAddressIsExecutable = async (address: string): Promise<boolean | null> => {
+  try {
+    const response = await fetch('https://api.mainnet-beta.solana.com', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'getAccountInfo',
+        params: [
+          address,
+          {
+            commitment: 'finalized',
+            encoding: 'base58',
+            dataSlice: {
+              length: 0
+            }
+          }
+        ]
+      })
+    });
+
+    if (!response.ok) {
+      return null;
+    }
+
+    const data = await response.json();
+
+    // If there's an error in the response, return null
+    if (data.error) {
+      return null;
+    }
+
+    // If account doesn't exist, return null
+    if (!data.result || !data.result.value) {
+      return null;
+    }
+
+    // Check if the account is executable
+    return data.result.value.executable === true;
+  } catch (error) {
+    console.warn('Error checking if address is executable:', error);
+    return null;
+  }
+};
+
 const SignaturesPage = () => {
   const [searchParams, setSearchParams] = useSearchParams();
   const queryFromUrl = searchParams.get('q') ?? '';
@@ -18,7 +67,6 @@ const SignaturesPage = () => {
   const [error, setError] = useState<string | null>(null);
   const [entries, setEntries] = useState<PdaEntry[]>([]);
   const [hasLoaded, setHasLoaded] = useState(false);
-  const [searchType, setSearchType] = useState<'pda' | 'program_id'>('pda');
   const [apiResponse, setApiResponse] = useState<ApiResponse | null>(null);
   const isSearchMode = !!queryFromUrl;
   const isLoading = isSearching || isExploring;
@@ -27,7 +75,7 @@ const SignaturesPage = () => {
     const controller = new AbortController();
     const { signal } = controller;
 
-    const fetchPdas = async (pdaOrProgramId: string | null, offset: number) => {
+    const fetchPdas = async (pdaOrProgramId: string | null, offset: number, searchType: 'pda' | 'program_id') => {
       const body: { [key: string]: string | number } = { offset };
       if (pdaOrProgramId) {
         body[searchType] = pdaOrProgramId;
@@ -48,6 +96,33 @@ const SignaturesPage = () => {
       return response.json() as Promise<ApiResponse>;
     };
 
+    const searchWithAutoDetection = async (address: string, offset: number): Promise<ApiResponse> => {
+      // First, try to determine if the address is executable (program)
+      const isExecutable = await checkIfAddressIsExecutable(address);
+
+      if (isExecutable === true) {
+        // Address is executable, search as program_id
+        return await fetchPdas(address, offset, 'program_id');
+      } else if (isExecutable === false) {
+        // Address is not executable, search as pda
+        return await fetchPdas(address, offset, 'pda');
+      } else {
+        // API call failed or returned null, try both approaches
+        // First try PDA search
+        try {
+          const pdaResults = await fetchPdas(address, offset, 'pda');
+          if (pdaResults.results.length > 0) {
+            return pdaResults;
+          }
+        } catch (error) {
+          // PDA search failed, continue to program_id search
+        }
+
+        // If PDA search returned no results or failed, try program_id search
+        return await fetchPdas(address, offset, 'program_id');
+      }
+    };
+
     const fetchData = async () => {
       const trimmedQuery = queryFromUrl.trim();
       setError(null);
@@ -59,7 +134,16 @@ const SignaturesPage = () => {
         } else {
           setIsExploring(true);
         }
-        const data = await fetchPdas(isSearchMode ? trimmedQuery : null, offsetFromUrl);
+
+        let data: ApiResponse;
+        if (isSearchMode && trimmedQuery) {
+          // Use auto-detection for search mode
+          data = await searchWithAutoDetection(trimmedQuery, offsetFromUrl);
+        } else {
+          // For exploration mode (no search query), use the original logic
+          data = await fetchPdas(null, offsetFromUrl, 'pda');
+        }
+
         setEntries(data.results);
         setApiResponse(data);
         setHasLoaded(true);
@@ -83,7 +167,7 @@ const SignaturesPage = () => {
     return () => {
       controller.abort();
     };
-  }, [queryFromUrl, offsetFromUrl, searchType, isSearchMode]);
+  }, [queryFromUrl, offsetFromUrl, isSearchMode]);
 
   // Auto-focus search input on page load
   useEffect(() => {
@@ -135,7 +219,7 @@ const SignaturesPage = () => {
                 ref={searchInputRef}
                 type="text"
                 value={query}
-                placeholder={`${searchType === 'pda' ? 'PDA' : 'Program'} Address`}
+                placeholder="PDA/Program ID"
                 onChange={(event) => setQuery(event.target.value)}
                 spellCheck={false}
               />
@@ -154,28 +238,6 @@ const SignaturesPage = () => {
               {isSearching ? 'Searching…' : 'Search'}
             </button>
           </form>
-          <div className="search-type-selector">
-            <label>
-              <input
-                type="radio"
-                name="searchType"
-                value="pda"
-                checked={searchType === 'pda'}
-                onChange={() => setSearchType('pda')}
-              />
-              PDA
-            </label>
-            <label>
-              <input
-                type="radio"
-                name="searchType"
-                value="program_id"
-                checked={searchType === 'program_id'}
-                onChange={() => setSearchType('program_id')}
-              />
-              Program ID
-            </label>
-          </div>
         </section>
 
         {error ? (
