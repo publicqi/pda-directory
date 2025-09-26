@@ -26,6 +26,13 @@
   --shadow-soft: 0 4px 20px rgba(0, 0, 0, 0.25);
   --header-bg: #1e1e1e;
   --divider: rgba(255, 255, 255, 0.12);
+
+  /* Smooth theme transitions */
+  transition:
+    background-color 0.3s ease,
+    color 0.3s ease,
+    border-color 0.3s ease,
+    box-shadow 0.3s ease;
 }
 
 :root[data-theme='light'] {
@@ -44,6 +51,28 @@
 
 * {
   box-sizing: border-box;
+}
+
+/* Smooth theme transitions for key elements */
+body,
+.header,
+.surface-card,
+.search-box,
+.seed-item,
+.seed-item-row,
+.pubkey-display,
+.stats-display {
+  transition:
+    background-color 0.3s ease,
+    color 0.3s ease,
+    border-color 0.3s ease,
+    box-shadow 0.3s ease;
+}
+
+/* Smooth transitions for SVG elements */
+svg,
+svg * {
+  transition: fill 0.3s ease, stroke 0.3s ease;
 }
 
 body {
@@ -164,7 +193,7 @@ input {
   color: var(--text-secondary);
   cursor: pointer;
   border-radius: 8px;
-  transition: all 0.2s ease;
+  transition: all 0.2s ease, background-color 0.3s ease, color 0.3s ease;
   text-decoration: none;
 }
 
@@ -452,7 +481,7 @@ input {
   color: var(--accent);
   border-radius: 4px;
   cursor: pointer;
-  transition: all 0.2s ease;
+  transition: all 0.2s ease, background-color 0.3s ease, color 0.3s ease;
   padding: 0;
   font-size: 0.7rem;
 }
@@ -584,7 +613,7 @@ input {
   color: var(--accent);
   border-radius: 4px;
   cursor: pointer;
-  transition: all 0.2s ease;
+  transition: all 0.2s ease, background-color 0.3s ease, color 0.3s ease;
   padding: 0;
 }
 
