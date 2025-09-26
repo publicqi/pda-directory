@@ -80,27 +80,31 @@ async fn upload_loop(args: UploadArgs) -> Result<()> {
 
 fn merge(args: MergeArgs) -> Result<()> {
     let files = all_valid_files(args.path)?;
+    println!("Found {} files", files.len());
     let mut entries: Vec<PdaSqlite> = Vec::new();
     for file in &files {
         let pda_sqlite = deserialize_pda_sqlite(file)?;
         entries.extend(pda_sqlite);
     }
 
+    println!("Deserialized {} entries", entries.len());
+
     let sqlite = rusqlite::Connection::open(args.output)?;
     sqlite.execute_batch(PDA_SQLITE_SCHEMA)?;
-    for pda_sqlite in entries {
+    println!("Executed schema");
+    for pda_sqlite in &entries {
         let encoded_seeds = encode_seeds_for_storage(&pda_sqlite.seeds);
         sqlite.execute(
             "INSERT INTO pda_registry (pda, program_id, seed_count, seed_bytes) VALUES (?, ?, ?, ?)",
             (pda_sqlite.pda.to_string(), pda_sqlite.program_id.to_string(), pda_sqlite.seeds.len(), encoded_seeds),
         )?;
     }
-
+    println!("Inserted {} entries", entries.len());
     // delete all files
     for file in &files {
         fs::remove_file(file)?;
     }
-
+    println!("Deleted {} files", files.len());
     Ok(())
 }
 
