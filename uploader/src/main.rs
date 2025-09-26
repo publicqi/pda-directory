@@ -1,7 +1,8 @@
 use std::{
     cmp,
+    collections::HashSet,
     fs::{self, File},
-    io::BufReader,
+    io::{BufReader, BufWriter},
     path::{Path, PathBuf},
     sync::{
         Arc, RwLock,
@@ -39,6 +40,9 @@ struct MergeArgs {
 
     #[arg(short, long)]
     output: PathBuf,
+
+    #[arg(short, long)]
+    dedup_hashset_file: PathBuf,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -70,6 +74,15 @@ async fn main() {
 }
 
 fn merge(args: MergeArgs) -> Result<()> {
+    let dedup_hashset_file = args.dedup_hashset_file;
+    let mut dedup_hashset: HashSet<Address> = if dedup_hashset_file.exists() {
+        let dedup_hashset = File::open(&dedup_hashset_file)?;
+        let dedup_hashset = BufReader::new(dedup_hashset);
+        bincode::deserialize_from(dedup_hashset).unwrap_or_default()
+    } else {
+        HashSet::new()
+    };
+
     let files: Vec<PathBuf> = all_valid_files(args.path)?;
     println!("Found {} files", files.len());
 
@@ -98,6 +111,13 @@ fn merge(args: MergeArgs) -> Result<()> {
         let mut entries = rw_entries.write().unwrap();
         entries.sort_by_key(|entry| entry.pda);
         entries.dedup_by_key(|entry| entry.pda);
+
+        entries.retain(|entry| !dedup_hashset.contains(&entry.pda));
+        dedup_hashset.extend(entries.iter().map(|entry| entry.pda));
+        // upload deduped entries to dedup_hashset_file
+        let dedup_hashset_file = File::create(dedup_hashset_file)?;
+        let dedup_hashset_file = BufWriter::new(dedup_hashset_file);
+        bincode::serialize_into(dedup_hashset_file, &dedup_hashset)?;
     }
 
     let entries = rw_entries.read().unwrap();
