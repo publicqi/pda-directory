@@ -94,8 +94,6 @@ fn merge(args: MergeArgs) -> Result<()> {
     println!("Starting deserialization of {total_files} files");
 
     files.clone().into_par_iter().for_each(|file| {
-        println!("Deserializing file {file:?}...");
-
         let pda_sqlite = deserialize_pda_sqlite(&file).unwrap_or_else(|err| {
             eprintln!("Failed to deserialize file {file:?}: {err}");
             panic!("Failed to deserialize pda sqlite");
@@ -103,7 +101,10 @@ fn merge(args: MergeArgs) -> Result<()> {
 
         rw_entries.write().unwrap().extend(pda_sqlite);
         let processed = num_files_dealt.fetch_add(1, Ordering::Relaxed) + 1;
-        println!("Finished deserializing file {file:?} ({processed}/{total_files})");
+        println!(
+            "Finished deserializing file ({processed}/{total_files}) {}",
+            rw_entries.read().unwrap().len()
+        );
     });
 
     let entries = rw_entries.read().unwrap();
