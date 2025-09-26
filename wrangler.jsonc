@@ -37,6 +37,8 @@
     ],
     "vars": {
         "API_BASE_URL": "https://api.pda.directory",
-        "BASE_URL": "https://pda.directory"
+        "BASE_URL": "https://pda.directory",
+        "VITE_API_BASE_URL": "https://api.pda.directory",
+        "VITE_BASE_URL": "https://pda.directory"
     }
 }
