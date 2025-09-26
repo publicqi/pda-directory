@@ -6,11 +6,16 @@ use std::{
     fs::{self, File},
     io::BufReader,
     path::PathBuf,
+    sync::{
+        Arc, RwLock,
+        atomic::{AtomicUsize, Ordering},
+    },
     time::{Duration, SystemTime},
 };
 
 use clap::{Parser, Subcommand, arg, command};
 use eyre::Result;
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use solana_address::Address;
 
@@ -79,28 +84,36 @@ async fn upload_loop(args: UploadArgs) -> Result<()> {
 }
 
 fn merge(args: MergeArgs) -> Result<()> {
-    let files = all_valid_files(args.path)?;
+    let files: Vec<PathBuf> = all_valid_files(args.path)?;
     println!("Found {} files", files.len());
-    let mut entries: Vec<PdaSqlite> = Vec::new();
-    for (idx, file) in files.iter().enumerate() {
-        let pda_sqlite = deserialize_pda_sqlite(file)?;
-        let new_entries = pda_sqlite.len();
-        entries.extend(pda_sqlite);
-        println!(
-            "Merged file {}/{} ({} new entries, {} total)",
-            idx + 1,
-            files.len(),
-            new_entries,
-            entries.len()
-        );
-    }
+
+    let rw_entries: Arc<RwLock<Vec<PdaSqlite>>> = Arc::new(RwLock::new(Vec::new()));
+    let num_files_dealt = Arc::new(AtomicUsize::new(0));
+    let total_files = files.len();
+
+    println!("Starting deserialization of {total_files} files");
+
+    files.clone().into_par_iter().for_each(|file| {
+        println!("Deserializing file {file:?}...");
+
+        let pda_sqlite = deserialize_pda_sqlite(&file).unwrap_or_else(|err| {
+            eprintln!("Failed to deserialize file {file:?}: {err}");
+            panic!("Failed to deserialize pda sqlite");
+        });
+
+        rw_entries.write().unwrap().extend(pda_sqlite);
+        let processed = num_files_dealt.fetch_add(1, Ordering::Relaxed) + 1;
+        println!("Finished deserializing file {file:?} ({processed}/{total_files})");
+    });
+
+    let entries = rw_entries.read().unwrap();
 
     println!("Deserialized {} entries", entries.len());
 
     let sqlite = rusqlite::Connection::open(args.output)?;
     sqlite.execute_batch(PDA_SQLITE_SCHEMA)?;
     println!("Executed schema");
-    for pda_sqlite in &entries {
+    for pda_sqlite in &*entries {
         let encoded_seeds = encode_seeds_for_storage(&pda_sqlite.seeds);
         sqlite.execute(
             "INSERT INTO pda_registry (pda, program_id, seed_count, seed_bytes) VALUES (?, ?, ?, ?)",
