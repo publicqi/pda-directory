@@ -93,6 +93,13 @@ fn merge(args: MergeArgs) -> Result<()> {
         );
     });
 
+    // deduplicate entries
+    {
+        let mut entries = rw_entries.write().unwrap();
+        entries.sort_by_key(|entry| entry.pda);
+        entries.dedup_by_key(|entry| entry.pda);
+    }
+
     let entries = rw_entries.read().unwrap();
     println!("Deserialized {} entries", entries.len());
 
