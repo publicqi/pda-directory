@@ -13,3 +13,5 @@ solana-address = { version = "1.0.0", features = ["serde", "decode"] }
 serde = "1.0.227"
 serde_json = "1.0.145"
 eyre = "0.6.12"
+rayon = "1.11.0"
+num_cpus = "1.17.0"
