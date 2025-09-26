@@ -29,10 +29,10 @@
 
   /* Smooth theme transitions */
   transition:
-    background-color 0.3s ease,
-    color 0.3s ease,
-    border-color 0.3s ease,
-    box-shadow 0.3s ease;
+    background-color 0.5s ease,
+    color 0.5s ease,
+    border-color 0.5s ease,
+    box-shadow 0.5s ease;
 }
 
 :root[data-theme='light'] {
@@ -63,16 +63,16 @@ body,
 .pubkey-display,
 .stats-display {
   transition:
-    background-color 0.3s ease,
-    color 0.3s ease,
-    border-color 0.3s ease,
-    box-shadow 0.3s ease;
+    background-color 0.5s ease,
+    color 0.5s ease,
+    border-color 0.5s ease,
+    box-shadow 0.5s ease;
 }
 
 /* Smooth transitions for SVG elements */
 svg,
 svg * {
-  transition: fill 0.3s ease, stroke 0.3s ease;
+  transition: fill 0.5s ease, stroke 0.5s ease;
 }
 
 body {
@@ -316,10 +316,11 @@ input {
   background: var(--surface-bg);
   border: 1px solid var(--border-subtle);
   border-radius: 8px;
-  padding: 12px 16px;
+  padding: 8px 8px 8px 16px;
   display: flex;
   gap: 12px;
   transition: border-color 0.2s ease;
+  align-items: center;
 }
 
 .search-box:focus-within {
@@ -369,6 +370,10 @@ input {
   margin-bottom: 18px;
   flex-wrap: wrap;
   gap: 12px;
+}
+
+.results-for-text .value-mono {
+  color: var(--text-primary);
 }
 
 .seed-grid {
@@ -709,8 +714,8 @@ input {
 
 .pagination-button {
   padding: 0.5rem 1rem;
-  border: 1px solid var(--border-color);
-  background-color: var(--surface-secondary);
+  border: 1px solid var(--border-subtle);
+  background-color: var(--surface-bg);
   color: var(--text-primary);
   border-radius: 6px;
   font-size: 0.875rem;
@@ -720,8 +725,8 @@ input {
 }
 
 .pagination-button:hover:not(:disabled) {
-  background-color: var(--surface-tertiary);
-  border-color: var(--border-hover);
+  background-color: var(--border-subtle);
+  border-color: var(--accent);
 }
 
 .pagination-button:disabled {
@@ -745,6 +750,48 @@ input {
 
 .pagination-footer .pagination-controls {
   justify-content: center;
+}
+
+.pda-entries-list {
+  transition: opacity 0.5s ease;
+}
+
+.pda-entries-list.loading {
+  opacity: 0.5;
+}
+
+/* Search input container and clear button */
+.search-input-container {
+  position: relative;
+  flex: 1;
+  display: flex;
+  align-items: center;
+}
+
+.clear-search-button {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: none;
+  border: none;
+  font-size: 1.5rem;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 0;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  transition: all 0.2s ease;
+  line-height: 1;
+}
+
+.clear-search-button:hover {
+  background-color: var(--surface-tertiary);
+  color: var(--text-primary);
 }
 
 /* Update results-meta to support pagination */
