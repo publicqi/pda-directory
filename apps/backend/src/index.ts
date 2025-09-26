@@ -282,7 +282,6 @@ export const createApp = (): Hono<Env> => {
     return c.json({ error: 'Not Found' }, 404);
   });
 
-  app.get('/api/health', (c) => c.json({ status: 'ok' }));
   app.get('/api/healthz', (c) => c.json({ status: 'ok' }));
 
   app.get('/api/last_update_time', async (c) => {
@@ -308,7 +307,6 @@ export const createApp = (): Hono<Env> => {
 
   app.get('/api/pdas', async (c) => {
     const settings = getSettings();
-    const { defaultLimit, maxLimit } = settings;
 
     const qRaw = c.req.query('q');
     const limitRaw = c.req.query('limit');

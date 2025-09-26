@@ -10,10 +10,16 @@
     "dev:backend": "npm run dev --workspace @pda/backend",
     "build": "npm run build --workspace @pda/frontend && npm run build --workspace @pda/backend",
     "build:frontend": "npm run build --workspace @pda/frontend",
-    "build:backend": "npm run build --workspace @pda/backend"
+    "build:backend": "npm run build --workspace @pda/backend",
+    "lint": "npm run lint --workspace @pda/frontend && npm run lint --workspace @pda/backend"
   },
   "devDependencies": {
+    "@typescript-eslint/eslint-plugin": "^7.16.1",
+    "@typescript-eslint/parser": "^7.16.1",
     "@types/node": "^20.12.7",
+    "eslint": "^8.57.1",
+    "eslint-plugin-react": "^7.34.3",
+    "eslint-plugin-react-hooks": "^4.6.2",
     "typescript": "^5.4.5",
     "wrangler": "^4.40.1"
   }
