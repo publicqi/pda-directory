@@ -116,7 +116,7 @@ fn merge(args: MergeArgs) -> Result<()> {
     for pda_sqlite in &*entries {
         let encoded_seeds = encode_seeds_for_storage(&pda_sqlite.seeds);
         sqlite.execute(
-            "INSERT INTO pda_registry (pda, program_id, seed_count, seed_bytes) VALUES (?, ?, ?, ?)",
+            "INSERT OR IGNORE INTO pda_registry (pda, program_id, seed_count, seed_bytes) VALUES (?, ?, ?, ?)",
             (pda_sqlite.pda.to_string(), pda_sqlite.program_id.to_string(), pda_sqlite.seeds.len(), encoded_seeds),
         )?;
     }
