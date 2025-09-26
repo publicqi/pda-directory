@@ -1,4 +1,4 @@
-import type { D1Database, Fetcher, KVNamespace } from '@cloudflare/workers-types';
+import type { D1Database, Fetcher, KVNamespace, RateLimit } from '@cloudflare/workers-types';
 import { base58_to_binary, binary_to_base58 } from 'base58-js';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
@@ -13,6 +13,7 @@ type Env = {
     PDA_METADATA: KVNamespace;
     ASSETS: Fetcher;
     API_BASE_URL?: string;
+    PDA_DIRECTORY_RATE_LIMITER: RateLimit;
   };
 };
 
@@ -258,6 +259,14 @@ export const createApp = (): Hono<Env> => {
   app.use('*', async (c, next) => {
     const path = c.req.path;
     if (path.startsWith('/api')) {
+      const limiter = c.env.PDA_DIRECTORY_RATE_LIMITER;
+      if (!limiter) {
+        throw new HTTPException(500, { message: 'Rate limit binding PDA_DIRECTORY_RATE_LIMITER is not configured' });
+      }
+      const { success } = await limiter.limit({ key: c.req.raw.headers.get('cf-connecting-ip') ?? '' });
+      if (!success) {
+        throw new HTTPException(429, { message: 'Rate limit exceeded (1 req/s)' });
+      }
       await next();
       return;
     }
