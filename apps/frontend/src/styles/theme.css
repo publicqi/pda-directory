@@ -772,7 +772,7 @@ input {
   position: absolute;
   right: 8px;
   top: 50%;
-  transform: translateY(-50%);
+  transform: translateY(-60%);
   background: none;
   border: none;
   font-size: 1.5rem;
