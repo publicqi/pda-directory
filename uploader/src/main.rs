@@ -82,9 +82,18 @@ fn merge(args: MergeArgs) -> Result<()> {
     let files = all_valid_files(args.path)?;
     println!("Found {} files", files.len());
     let mut entries: Vec<PdaSqlite> = Vec::new();
-    for file in &files {
+    for (idx, file) in files.iter().enumerate() {
+        let existing_count = entries.len();
         let pda_sqlite = deserialize_pda_sqlite(file)?;
+        let new_entries = pda_sqlite.len();
         entries.extend(pda_sqlite);
+        println!(
+            "Merged file {}/{} ({} new entries, {} total)",
+            idx + 1,
+            files.len(),
+            new_entries,
+            entries.len()
+        );
     }
 
     println!("Deserialized {} entries", entries.len());
@@ -100,6 +109,7 @@ fn merge(args: MergeArgs) -> Result<()> {
         )?;
     }
     println!("Inserted {} entries", entries.len());
+    sqlite.close().unwrap();
     // delete all files
     for file in &files {
         fs::remove_file(file)?;
