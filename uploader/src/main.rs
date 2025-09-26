@@ -131,7 +131,7 @@ fn all_valid_files(root: PathBuf) -> Result<Vec<PathBuf>> {
         let filename = path.file_name().unwrap().to_str().unwrap();
         if filename.starts_with("pda_collector_") && filename.ends_with(".blob") {
             let metadata = entry.metadata()?;
-            let age = metadata.modified()?.duration_since(now)?;
+            let age = metadata.modified()?.duration_since(now).unwrap_or_default();
             if age > Duration::from_secs(5) {
                 files.push(path);
             }
