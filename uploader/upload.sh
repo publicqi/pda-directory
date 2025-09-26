@@ -332,6 +332,7 @@ while true; do
     downloaded_files=""
     if ! downloaded_files=$(rsync -av \
         --include="*.sqlite" \
+        --exclude="*.shard*.sqlite" \
         --exclude="*" \
         "$REMOTE_PATH" "$LOCAL_DOWNLOAD_DIR/" 2>/dev/null | grep -E "\.sqlite$" || true); then
         echo "Warning: rsync command failed. Will retry in next cycle."
