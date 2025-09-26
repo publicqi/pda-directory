@@ -4,6 +4,7 @@ import { Route, Routes } from 'react-router-dom';
 import { DarkModeContext } from './contexts/DarkModeContext';
 import SignaturesPage from './pages/Signatures';
 import ImportPage from './pages/Import';
+import ExplorePage from './pages/Explore';
 
 const App = () => {
   const [darkMode, setDarkMode] = useState(() => {
@@ -27,6 +28,7 @@ const App = () => {
     <DarkModeContext.Provider value={[darkMode, setDarkMode]}>
       <Routes>
         <Route path="/" element={<SignaturesPage />} />
+        <Route path="/explore" element={<ExplorePage />} />
         <Route path="/import" element={<ImportPage />} />
         <Route path="*" element={<SignaturesPage />} />
       </Routes>

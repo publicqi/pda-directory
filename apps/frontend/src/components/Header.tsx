@@ -20,6 +20,7 @@ const Header = () => {
                     </Link>
                     <div className="header-divider-vertical"></div>
                     <nav className="nav-links">
+                        <Link to="/explore" className="nav-link">Explore</Link>
                         <Link to="/import" className="nav-link">Import</Link>
                     </nav>
                 </div>

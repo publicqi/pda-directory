@@ -7,9 +7,6 @@ import { HTTPException } from 'hono/http-exception';
 const LAST_UPDATE_KEY = 'last_update_time';
 const TOTAL_ENTRIES_KEY = 'total_entries';
 
-const DEFAULT_LIMIT = 25;
-const MAX_LIMIT = 50;
-
 type Env = {
   Bindings: {
     pda_directory: D1Database;
@@ -136,12 +133,6 @@ function toHex(value: Uint8Array): string {
   return `0x${Array.from(value, (byte) => byte.toString(16).padStart(2, '0')).join('')}`;
 }
 
-function getSettings(): Settings {
-  return {
-    defaultLimit: DEFAULT_LIMIT,
-    maxLimit: MAX_LIMIT,
-  };
-}
 
 function sliceBuffer(bytes: Uint8Array): ArrayBuffer {
   const clone = new Uint8Array(bytes.byteLength);
@@ -157,13 +148,45 @@ async function fetchPdas(
   const params: unknown[] = [];
 
   if (queryBytes) {
-    sql += 'WHERE pda = ? OR program_id = ? ';
+    sql += 'WHERE pda = ? ';
     const buffer = sliceBuffer(queryBytes);
-    params.push(buffer, sliceBuffer(queryBytes));
+    params.push(buffer);
   }
 
   sql += 'ORDER BY pda LIMIT ? OFFSET ?';
   params.push(limit, offset);
+
+  const statement = db.prepare(sql).bind(...params);
+  type Row = {
+    pda: number[] | Uint8Array | ArrayBuffer;
+    program_id: number[] | Uint8Array | ArrayBuffer;
+    seed_bytes: number[] | Uint8Array | ArrayBuffer;
+  };
+
+  const response = await statement.all<Row>();
+
+  if (!response.success || !response.results) {
+    return [];
+  }
+
+  return response.results.map((row) => {
+    const pda = fromD1Blob(row.pda, 'pda');
+    const programId = fromD1Blob(row.program_id, 'program_id');
+    const seedBytes = fromD1Blob(row.seed_bytes, 'seed_bytes');
+
+    assertExactByteLength(pda, 32, 'pda');
+    assertExactByteLength(programId, 32, 'program_id');
+
+    return { pda, programId, seedBytes } as PdaRecord;
+  });
+}
+
+async function fetchLatestPdas(
+  db: D1Database,
+  { limit, offset }: { limit: number; offset: number },
+): Promise<PdaRecord[]> {
+  const sql = 'SELECT pda, program_id, seed_bytes FROM pda_registry ORDER BY pda LIMIT ? OFFSET ?';
+  const params = [limit, offset];
 
   const statement = db.prepare(sql).bind(...params);
   type Row = {
@@ -230,7 +253,7 @@ export const createApp = (): Hono<Env> => {
     return c.json({ error: 'Internal Server Error' }, 500);
   });
 
-  app.use('/api/*', cors({ origin: '*', allowMethods: ['GET'], allowHeaders: ['Content-Type'] }));
+  app.use('/api/*', cors({ origin: '*', allowMethods: ['GET', 'POST'], allowHeaders: ['Content-Type'] }));
 
   app.use('*', async (c, next) => {
     const path = c.req.path;
@@ -269,17 +292,24 @@ export const createApp = (): Hono<Env> => {
 
   });
 
-  app.get('/api/pdas', async (c) => {
-    const settings = getSettings();
+  app.post('/api/pda/query', async (c) => {
+    const body = await c.req.json();
+    const pda = body?.pda;
 
-    const qRaw = c.req.query('q');
-    const limitRaw = c.req.query('limit');
-    const offsetRaw = c.req.query('offset');
+    // Force limit to 1 for PDA queries
+    const limit = 1;
+    const offset = 0;
 
-    const limit = resolveLimit(limitRaw, settings);
-    const offset = resolveOffset(offsetRaw);
+    if (!pda || typeof pda !== 'string') {
+      throw new HTTPException(400, { message: 'PDA is required in request body' });
+    }
 
-    const queryBytes = parseQuery(qRaw);
+    const queryBytes = parseQuery(pda);
+
+    // Require a valid PDA
+    if (!queryBytes) {
+      throw new HTTPException(400, { message: 'PDA must be a valid base58 address' });
+    }
 
     const database = c.env.pda_directory;
     if (!database) {
@@ -312,10 +342,65 @@ export const createApp = (): Hono<Env> => {
     });
 
     return c.json({
-      query: qRaw ?? null,
+      query: pda,
       limit,
       offset,
       count: entries.length,
+      results: entries,
+    });
+  });
+
+  app.post('/api/pda/list', async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    const limitFromBody = body?.limit;
+    const offsetFromBody = body?.offset;
+
+    // Default limit of 25 for listing
+    const limit = limitFromBody && typeof limitFromBody === 'number' && limitFromBody > 0
+      ? Math.min(limitFromBody, 50) // Cap at 50
+      : 25;
+    const offset = offsetFromBody && typeof offsetFromBody === 'number' && offsetFromBody >= 0
+      ? offsetFromBody
+      : 0;
+
+    const database = c.env.pda_directory;
+    if (!database) {
+      throw new HTTPException(500, { message: 'Database binding pda_directory is not configured' });
+    }
+
+    let rows: PdaRecord[];
+    try {
+      rows = await fetchLatestPdas(database, { limit, offset });
+    } catch (error) {
+      console.error('Failed to fetch latest PDAs', error);
+      throw new HTTPException(500, { message: 'Failed to read from PDA directory' });
+    }
+
+    const entries = rows.map((row) => {
+      const seedsRaw = decodeSeedBlob(row.seedBytes);
+      const seeds = seedsRaw.map((seed, index) => ({
+        index,
+        raw_hex: toHex(seed),
+        length: seed.length,
+        is_bump: seedsRaw.length > 0 && index === seedsRaw.length - 1,
+      }));
+
+      return {
+        pda: base58Encode(row.pda),
+        program_id: base58Encode(row.programId),
+        seed_count: seedsRaw.length,
+        seeds,
+      };
+    });
+
+    return c.json({
+      limit,
+      offset,
+      count: entries.length,
+      has_next: entries.length === limit, // If we got a full page, there might be more
+      has_previous: offset > 0,
+      next_offset: offset + limit,
+      previous_offset: Math.max(0, offset - limit),
       results: entries,
     });
   });
@@ -327,7 +412,7 @@ export const createApp = (): Hono<Env> => {
 
 const app = createApp();
 
-export { base58Decode, base58Encode, decodeSeedBlob, fetchPdas, parseQuery, resolveLimit, resolveOffset };
+export { base58Decode, base58Encode, decodeSeedBlob, fetchPdas, fetchLatestPdas, parseQuery, resolveLimit, resolveOffset };
 export type { Env, PdaRecord };
 
 export default app;

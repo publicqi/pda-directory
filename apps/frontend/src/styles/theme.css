@@ -682,6 +682,81 @@ input {
   background-color: #f44336;
 }
 
+/* Explore page styles */
+.explore-header {
+  text-align: center;
+  margin-bottom: 2rem;
+}
+
+.explore-header h1 {
+  font-size: 2rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0 0 0.5rem 0;
+}
+
+.explore-header .label {
+  font-size: 1rem;
+  color: var(--text-secondary);
+}
+
+/* Pagination controls */
+.pagination-controls {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.pagination-button {
+  padding: 0.5rem 1rem;
+  border: 1px solid var(--border-color);
+  background-color: var(--surface-secondary);
+  color: var(--text-primary);
+  border-radius: 6px;
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.pagination-button:hover:not(:disabled) {
+  background-color: var(--surface-tertiary);
+  border-color: var(--border-hover);
+}
+
+.pagination-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.pagination-info {
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.pagination-footer {
+  margin-top: 2rem;
+  padding: 1.5rem 0;
+  border-top: 1px solid var(--border-color);
+  display: flex;
+  justify-content: center;
+}
+
+.pagination-footer .pagination-controls {
+  justify-content: center;
+}
+
+/* Update results-meta to support pagination */
+.results-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1.5rem;
+  flex-wrap: wrap;
+  gap: 1rem;
+}
+
 @media (max-width: 768px) {
   .stats-display {
     display: none;
@@ -689,5 +764,19 @@ input {
 
   .header-divider-vertical {
     display: none;
+  }
+
+  .results-meta {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .pagination-controls {
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+
+  .explore-header h1 {
+    font-size: 1.5rem;
   }
 }

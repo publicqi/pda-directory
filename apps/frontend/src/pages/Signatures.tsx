@@ -30,12 +30,20 @@ const SignaturesPage = () => {
       setError(null);
 
       try {
-        const params = new URLSearchParams({ limit: String(DEFAULT_LIMIT) });
-        if (trimmed) {
-          params.set('q', trimmed);
+        if (!trimmed) {
+          // If no query, don't make a request
+          setEntries([]);
+          setLastResponse(null);
+          setHasLoaded(true);
+          return;
         }
 
-        const response = await fetch(`${API_BASE_URL}/api/pdas?${params.toString()}`, {
+        const response = await fetch(`${API_BASE_URL}/api/pda/query`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ pda: trimmed }),
           signal,
         });
         if (!response.ok) {
@@ -99,7 +107,7 @@ const SignaturesPage = () => {
               ref={searchInputRef}
               type="text"
               value={query}
-              placeholder="PDA/Program ID"
+              placeholder="PDA Address"
               onChange={(event) => setQuery(event.target.value)}
               spellCheck={false}
             />
@@ -137,7 +145,7 @@ const SignaturesPage = () => {
           <div className="surface-card">
             <h2>No results</h2>
             <p className="value-mono">
-              Nothing matched your query. Try the program ID instead or double-check that the PDA exists in the directory.
+              Nothing matched your query. Double-check that the PDA address exists in the directory.
             </p>
           </div>
         ) : null}
