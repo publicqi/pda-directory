@@ -83,7 +83,6 @@ fn merge(args: MergeArgs) -> Result<()> {
     println!("Found {} files", files.len());
     let mut entries: Vec<PdaSqlite> = Vec::new();
     for (idx, file) in files.iter().enumerate() {
-        let existing_count = entries.len();
         let pda_sqlite = deserialize_pda_sqlite(file)?;
         let new_entries = pda_sqlite.len();
         entries.extend(pda_sqlite);
