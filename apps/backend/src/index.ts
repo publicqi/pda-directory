@@ -2,13 +2,12 @@ import type { Fetcher, KVNamespace } from '@cloudflare/workers-types';
 import { Hono } from 'hono';
 
 const LAST_UPDATE_KEY = 'last_update_time';
-const apiBase = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000';
-const API_BASE_URL = apiBase.replace(/\/$/, '');
 
 type Env = {
   Bindings: {
     PDA_LAST_UPDATE: KVNamespace;
     ASSETS: Fetcher;
+    API_BASE_URL?: string;
   };
 };
 
@@ -17,7 +16,9 @@ const app = new Hono<Env>();
 // Serve the frontend for non-API requests.
 app.use('*', async (c, next) => {
   const url = new URL(c.req.url);
-  if (url.hostname === API_BASE_URL) {
+  const apiBase = c.env.API_BASE_URL ?? 'http://localhost:8000';
+  const apiHostname = new URL(apiBase).hostname;
+  if (url.hostname === apiHostname) {
     await next();
   } else {
     return c.env.ASSETS.fetch(c.req.raw);
