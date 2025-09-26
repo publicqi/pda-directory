@@ -1,16 +1,12 @@
-import type { D1Database, Fetcher, KVNamespace, RateLimit } from '@cloudflare/workers-types';
+import type { D1Database, Fetcher, RateLimit } from '@cloudflare/workers-types';
 import { base58_to_binary, binary_to_base58 } from 'base58-js';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { HTTPException } from 'hono/http-exception';
 
-const LAST_UPDATE_KEY = 'last_update_time';
-const TOTAL_ENTRIES_KEY = 'total_entries';
-
 type Env = {
   Bindings: {
     pda_directory: D1Database;
-    PDA_METADATA: KVNamespace;
     ASSETS: Fetcher;
     API_BASE_URL?: string;
     PDA_DIRECTORY_RATE_LIMITER: RateLimit;
@@ -29,7 +25,8 @@ type PdaRecord = {
 };
 
 type ListParams = {
-  queryBytes: Uint8Array | null;
+  pdaBytes: Uint8Array | null;
+  programIdBytes: Uint8Array | null;
   limit: number;
   offset: number;
 };
@@ -143,51 +140,24 @@ function sliceBuffer(bytes: Uint8Array): ArrayBuffer {
 
 async function fetchPdas(
   db: D1Database,
-  { queryBytes, limit, offset }: ListParams,
+  { pdaBytes, programIdBytes, limit, offset }: ListParams,
 ): Promise<PdaRecord[]> {
   let sql = 'SELECT pda, program_id, seed_bytes FROM pda_registry ';
   const params: unknown[] = [];
 
-  if (queryBytes) {
+  if (pdaBytes) {
     sql += 'WHERE pda = ? ';
-    const buffer = sliceBuffer(queryBytes);
+    const buffer = sliceBuffer(pdaBytes);
+    params.push(buffer);
+  } else if (programIdBytes) {
+    const hexByte = programIdBytes[0].toString(16).padStart(2, '0').toUpperCase();
+    sql += `WHERE program_id = ? AND substr(program_id, 1, 1) = X'${hexByte}' `;
+    const buffer = sliceBuffer(programIdBytes);
     params.push(buffer);
   }
 
   sql += 'ORDER BY pda LIMIT ? OFFSET ?';
   params.push(limit, offset);
-
-  const statement = db.prepare(sql).bind(...params);
-  type Row = {
-    pda: number[] | Uint8Array | ArrayBuffer;
-    program_id: number[] | Uint8Array | ArrayBuffer;
-    seed_bytes: number[] | Uint8Array | ArrayBuffer;
-  };
-
-  const response = await statement.all<Row>();
-
-  if (!response.success || !response.results) {
-    return [];
-  }
-
-  return response.results.map((row) => {
-    const pda = fromD1Blob(row.pda, 'pda');
-    const programId = fromD1Blob(row.program_id, 'program_id');
-    const seedBytes = fromD1Blob(row.seed_bytes, 'seed_bytes');
-
-    assertExactByteLength(pda, 32, 'pda');
-    assertExactByteLength(programId, 32, 'program_id');
-
-    return { pda, programId, seedBytes } as PdaRecord;
-  });
-}
-
-async function fetchLatestPdas(
-  db: D1Database,
-  { limit, offset }: { limit: number; offset: number },
-): Promise<PdaRecord[]> {
-  const sql = 'SELECT pda, program_id, seed_bytes FROM pda_registry ORDER BY pda LIMIT ? OFFSET ?';
-  const params = [limit, offset];
 
   const statement = db.prepare(sql).bind(...params);
   type Row = {
@@ -273,23 +243,33 @@ export const createApp = (): Hono<Env> => {
   app.get('/api/healthz', (c) => c.json({ status: 'ok' }));
 
   app.get('/api/last_update_time', async (c) => {
-    const kv = c.env.PDA_METADATA;
-    if (!kv) {
-      return c.json({ error: 'KV namespace PDA_METADATA is not configured' }, 500);
+    // SELECT last_insert_ts FROM _table_counts WHERE name = "pda_registry";
+    const database = c.env.pda_directory;
+    if (!database) {
+      throw new HTTPException(500, { message: 'Database binding pda_directory is not configured' });
     }
 
-    const lastUpdate = await kv.get(LAST_UPDATE_KEY);
-    return c.json({ lastUpdateTime: lastUpdate ?? null });
+    const lastUpdate = await database.prepare('SELECT last_insert_ts FROM _table_counts WHERE name = "pda_registry";').all();
+    if (!lastUpdate.results) {
+      throw new HTTPException(500, { message: 'Failed to fetch last update time' });
+    }
+    const lastUpdateTime = lastUpdate.results[0].last_insert_ts;
+    return c.json({ lastUpdateTime: lastUpdateTime ?? null });
   });
 
   app.get('/api/total_entries', async (c) => {
-    const kv = c.env.PDA_METADATA;
-    if (!kv) {
-      return c.json({ error: 'KV namespace PDA_METADATA is not configured' }, 500);
+    // SELECT n FROM _table_counts WHERE name = "pda_registry";
+    const database = c.env.pda_directory;
+    if (!database) {
+      throw new HTTPException(500, { message: 'Database binding pda_directory is not configured' });
     }
 
-    const totalEntries = await kv.get(TOTAL_ENTRIES_KEY);
-    return c.json({ totalEntries: totalEntries ?? null });
+    const totalEntries = await database.prepare('SELECT n FROM _table_counts WHERE name = "pda_registry";').all();
+    if (!totalEntries.results) {
+      throw new HTTPException(500, { message: 'Failed to fetch total entries' });
+    }
+    const totalEntriesCount = totalEntries.results[0].n;
+    return c.json({ totalEntries: totalEntriesCount ?? null });
 
   });
 
@@ -303,22 +283,29 @@ export const createApp = (): Hono<Env> => {
       throw new HTTPException(429, { message: 'Rate limit exceeded (1 req/s)' });
     }
 
-    const body = await c.req.json();
-    const pda = body?.pda;
+    const body = await c.req.json().catch(() => ({}));
+    const { pda, program_id, limit: limitFromBody, offset: offsetFromBody } = body;
 
-    // Force limit to 1 for PDA queries
-    const limit = 1;
-    const offset = 0;
-
-    if (!pda || typeof pda !== 'string') {
-      throw new HTTPException(400, { message: 'PDA is required in request body' });
+    if (pda && typeof pda !== 'string') {
+      throw new HTTPException(400, { message: 'pda must be a string' });
+    }
+    if (program_id && typeof program_id !== 'string') {
+      throw new HTTPException(400, { message: 'program_id must be a string' });
     }
 
-    const queryBytes = parseQuery(pda);
+    const pdaBytes = pda ? parseQuery(pda) : null;
+    const programIdBytes = program_id ? parseQuery(program_id) : null;
 
-    // Require a valid PDA
-    if (!queryBytes) {
-      throw new HTTPException(400, { message: 'PDA must be a valid base58 address' });
+    let limit: number;
+    let offset: number;
+
+    if (pdaBytes) {
+      limit = 1;
+      offset = 0;
+    } else {
+      const settings: Settings = { defaultLimit: 25, maxLimit: 50 };
+      limit = resolveLimit(limitFromBody?.toString(), settings);
+      offset = resolveOffset(offsetFromBody?.toString());
     }
 
     const database = c.env.pda_directory;
@@ -328,7 +315,7 @@ export const createApp = (): Hono<Env> => {
 
     let rows: PdaRecord[];
     try {
-      rows = await fetchPdas(database, { queryBytes, limit, offset });
+      rows = await fetchPdas(database, { pdaBytes, programIdBytes, limit, offset });
     } catch (error) {
       console.error('Failed to fetch PDAs', error);
       throw new HTTPException(500, { message: 'Failed to read from PDA directory' });
@@ -351,77 +338,27 @@ export const createApp = (): Hono<Env> => {
       };
     });
 
-    return c.json({
-      query: pda,
+    const responsePayload: { [key: string]: unknown } = {
       limit,
       offset,
       count: entries.length,
       results: entries,
-    });
-  });
+    };
 
-  app.post('/api/pda/list', async (c) => {
-    const limiter = c.env.PDA_DIRECTORY_RATE_LIMITER;
-    if (!limiter) {
-      throw new HTTPException(500, { message: 'Rate limit binding PDA_DIRECTORY_RATE_LIMITER is not configured' });
-    }
-    const { success } = await limiter.limit({ key: c.req.raw.headers.get('cf-connecting-ip') ?? '' });
-    if (!success) {
-      throw new HTTPException(429, { message: 'Rate limit exceeded (1 req/s)' });
+    if (pda) {
+      responsePayload.query = { pda };
+    } else if (program_id) {
+      responsePayload.query = { program_id };
     }
 
-    const body = await c.req.json().catch(() => ({}));
-    const limitFromBody = body?.limit;
-    const offsetFromBody = body?.offset;
-
-    // Default limit of 25 for listing
-    const limit = limitFromBody && typeof limitFromBody === 'number' && limitFromBody > 0
-      ? Math.min(limitFromBody, 50) // Cap at 50
-      : 25;
-    const offset = offsetFromBody && typeof offsetFromBody === 'number' && offsetFromBody >= 0
-      ? offsetFromBody
-      : 0;
-
-    const database = c.env.pda_directory;
-    if (!database) {
-      throw new HTTPException(500, { message: 'Database binding pda_directory is not configured' });
+    if (!pdaBytes) {
+      responsePayload.has_next = entries.length === limit;
+      responsePayload.has_previous = offset > 0;
+      responsePayload.next_offset = offset + limit;
+      responsePayload.previous_offset = Math.max(0, offset - limit);
     }
 
-    let rows: PdaRecord[];
-    try {
-      rows = await fetchLatestPdas(database, { limit, offset });
-    } catch (error) {
-      console.error('Failed to fetch latest PDAs', error);
-      throw new HTTPException(500, { message: 'Failed to read from PDA directory' });
-    }
-
-    const entries = rows.map((row) => {
-      const seedsRaw = decodeSeedBlob(row.seedBytes);
-      const seeds = seedsRaw.map((seed, index) => ({
-        index,
-        raw_hex: toHex(seed),
-        length: seed.length,
-        is_bump: seedsRaw.length > 0 && index === seedsRaw.length - 1,
-      }));
-
-      return {
-        pda: base58Encode(row.pda),
-        program_id: base58Encode(row.programId),
-        seed_count: seedsRaw.length,
-        seeds,
-      };
-    });
-
-    return c.json({
-      limit,
-      offset,
-      count: entries.length,
-      has_next: entries.length === limit, // If we got a full page, there might be more
-      has_previous: offset > 0,
-      next_offset: offset + limit,
-      previous_offset: Math.max(0, offset - limit),
-      results: entries,
-    });
+    return c.json(responsePayload);
   });
 
   app.all('/api/*', (c) => c.json({ error: 'Invalid request' }, 400));
@@ -431,7 +368,7 @@ export const createApp = (): Hono<Env> => {
 
 const app = createApp();
 
-export { base58Decode, base58Encode, decodeSeedBlob, fetchPdas, fetchLatestPdas, parseQuery, resolveLimit, resolveOffset };
+export { base58Decode, base58Encode, decodeSeedBlob, fetchPdas, parseQuery, resolveLimit, resolveOffset };
 export type { Env, PdaRecord };
 
 export default app;

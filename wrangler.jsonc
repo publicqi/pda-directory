@@ -14,12 +14,7 @@
             "database_id": "65dbe413-7fa7-49e4-af70-988458f76fe1"
         }
     ],
-    "kv_namespaces": [
-        {
-            "binding": "PDA_METADATA",
-            "id": "4d008d542913447296e7ff758e0ef3fc"
-        }
-    ],
+    "kv_namespaces": [],
     "observability": {
         "logs": {
             "enabled": true
@@ -44,7 +39,6 @@
     "ratelimits": [
         {
             "name": "PDA_DIRECTORY_RATE_LIMITER",
-            "type": "ratelimit",
             "namespace_id": "1337",
             "simple": {
                 "limit": 60,

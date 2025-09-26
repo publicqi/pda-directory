@@ -32,14 +32,12 @@ CHUNK_SIZE=100000
 D1_DATABASE="pda-directory"
 MAX_RETRIES=3
 RETRY_DELAY_SECONDS=5
-MONITOR_INTERVAL=600  # 10 minutes in seconds
+MONITOR_INTERVAL=60  # 1 minute in seconds
 
 # Validate required environment variables for Telegram
 if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
     echo "Warning: TELEGRAM_BOT_TOKEN and/or TELEGRAM_CHAT_ID not set. Telegram notifications disabled."
-    TELEGRAM_ENABLED=false
-else
-    TELEGRAM_ENABLED=true
+    exit 1
 fi
 
 # --- Functions ---
@@ -47,10 +45,6 @@ fi
 # Function to send Telegram message
 send_telegram() {
     local text="$1"
-    
-    if [ "$TELEGRAM_ENABLED" != "true" ]; then
-        return 0
-    fi
     
     # Escape special characters for JSON
     text=$(echo "$text" | sed 's/\\/\\\\/g; s/"/\\"/g; s/\t/\\t/g; s/\r/\\r/g; s/\n/\\n/g')
@@ -69,85 +63,43 @@ send_telegram() {
     }
 }
 
-# Function to update KV store with timestamp
-update_kv_timestamp() {
-    local timestamp=$(date +%s)
-    echo "Updating KV store with timestamp: $timestamp"
-    
-    if ! npx wrangler kv key put last_update_time "$timestamp" --binding PDA_METADATA --remote; then
-        echo "Warning: Failed to update KV store timestamp"
-        return 1
-    fi
-    
-    echo "Successfully updated KV store timestamp"
-    return 0
-}
-
-# Function to get total entries from KV store
-get_kv_total_entries() {
-    local total_entries
-    total_entries=$(npx wrangler kv key get total_entries --binding PDA_METADATA --remote --text 2>/dev/null || echo "0")
-    echo "$total_entries"
-}
-
-# Function to update KV store with total entries
-update_kv_total_entries() {
-    local new_total="$1"
-    echo "Updating KV store with total entries: $new_total"
-    
-    if ! npx wrangler kv key put total_entries "$new_total" --binding PDA_METADATA --remote; then
-        echo "Warning: Failed to update KV store total entries"
-        return 1
-    fi
-    
-    echo "Successfully updated KV store total entries"
-    return 0
-}
-
-# Function to get last update time from KV store
-get_kv_last_update_time() {
-    local last_update
-    last_update=$(npx wrangler kv key get last_update_time --binding PDA_METADATA --remote --text 2>/dev/null || echo "")
-    echo "$last_update"
-}
-
 # Function to delete remote file after successful processing
 delete_remote_file() {
     local filename="$1"
     local remote_file_path="${REMOTE_PATH}${filename}"
     
-    echo "Attempting to delete remote file: $remote_file_path"
-    
-    # Use ssh to delete the remote file if it's an ssh connection
-    if [[ "$REMOTE_PATH" == *":"* ]]; then
-        # Extract hostname and path for SSH-based connections
-        local ssh_host=$(echo "$REMOTE_PATH" | cut -d':' -f1)
-        local remote_dir=$(echo "$REMOTE_PATH" | cut -d':' -f2-)
-        local full_remote_path="${remote_dir}${filename}"
-        
-        if ssh "$ssh_host" "rm -f \"$full_remote_path\"" 2>/dev/null; then
-            echo "Successfully deleted remote file: $remote_file_path"
-            return 0
-        else
-            echo "Warning: Failed to delete remote file: $remote_file_path"
-            return 1
-        fi
+    # Extract hostname and path for SSH-based connections
+    local ssh_host=$(echo "$REMOTE_PATH" | cut -d':' -f1)
+    local remote_dir=$(echo "$REMOTE_PATH" | cut -d':' -f2-)
+    local full_remote_path="${remote_dir}${filename}"
+    echo "ssh $ssh_host \"rm -f \"$full_remote_path\""
+    if ssh "$ssh_host" "rm -f \"$full_remote_path\"" 2>/dev/null; then
+        return 0
     else
-        # For local paths or other protocols, try direct rm
-        if rm -f "$remote_file_path" 2>/dev/null; then
-            echo "Successfully deleted remote file: $remote_file_path"
-            return 0
-        else
-            echo "Warning: Failed to delete remote file: $remote_file_path"
-            return 1
-        fi
+        send_telegram "Warning: Failed to delete remote file: $remote_file_path"
+        return 1
     fi
+}
+
+get_total_entries() {
+    # npx wrangler d1 execute pda-directory --remote --command="SELECT n FROM _table_counts WHERE name = 'pda_registry';" --json | jq '.[0].results[0].n'
+    total_entries_output=$(npx wrangler d1 execute "$D1_DATABASE" --remote --command="SELECT n FROM _table_counts WHERE name = 'pda_registry';" --json)
+    total_entries=$(echo "$total_entries_output" | jq '.[0].results[0].n')
+    return $total_entries
+}
+
+get_last_update_time() {
+    # npx wrangler d1 execute pda-directory --remote --command="SELECT last_insert_ts FROM _table_counts WHERE name = 'pda_registry';" --json | jq '.[0].results[0].last_insert_ts'
+    last_update_time_output=$(npx wrangler d1 execute "$D1_DATABASE" --remote --command="SELECT last_insert_ts FROM _table_counts WHERE name = 'pda_registry';" --json)
+    last_update_time=$(echo "$last_update_time_output" | jq '.[0].results[0].last_insert_ts')
+    return $last_update_time
 }
 
 # Function to process a single SQLite file
 process_sqlite_file() {
     local db_file="$1"
     local filename=$(basename "$db_file")
+    local current_total=$(get_total_entries)
     
     echo "Processing SQLite file: $filename"
     
@@ -155,13 +107,13 @@ process_sqlite_file() {
     if [ -d "$CHUNKS_DIR" ]; then
         echo "Removing existing chunks directory: $CHUNKS_DIR"
         rm -r "$CHUNKS_DIR" || {
-            echo "ERROR: Failed to remove existing chunks directory"
+            send_telegram "ERROR: Failed to remove existing chunks directory"
             return 1
         }
     fi
     
     mkdir -p "$CHUNKS_DIR" || {
-        echo "ERROR: Failed to create chunks directory"
+        send_telegram "ERROR: Failed to create chunks directory"
         return 1
     }
 
@@ -173,7 +125,7 @@ process_sqlite_file() {
       sed 's/^INSERT INTO/INSERT OR IGNORE INTO/' | \
       sed 's/^CREATE TABLE/CREATE TABLE IF NOT EXISTS/' | \
       split -l "$CHUNK_SIZE" - "$CHUNKS_DIR/chunk_"; then
-        echo "ERROR: Failed to dump and split database $filename"
+        send_telegram "ERROR: Failed to dump and split database $filename"
         return 1
     fi
 
@@ -181,7 +133,7 @@ process_sqlite_file() {
     for f in "$CHUNKS_DIR"/chunk_*; do
       if [ -f "$f" ]; then
         mv -- "$f" "$f.sql" || {
-          echo "ERROR: Failed to rename chunk file $f"
+          send_telegram "ERROR: Failed to rename chunk file $f"
           return 1
         }
       fi
@@ -206,7 +158,7 @@ process_sqlite_file() {
       do
         retries=$((retries-1))
         if [ $retries -eq 0 ]; then
-          echo "ERROR: Failed to upload '$file' after $MAX_RETRIES attempts."
+          send_telegram "ERROR: Failed to upload '$file' after $MAX_RETRIES attempts."
           upload_failed=true
           break
         fi
@@ -230,93 +182,68 @@ process_sqlite_file() {
     done
 
     if [ "$upload_failed" = "true" ]; then
-        echo "ERROR: Upload failed for $filename. Aborting processing."
+        send_telegram "ERROR: Upload failed for $filename. Aborting processing."
         return 1
     fi
 
-    echo "All chunks for $filename uploaded successfully."
-    
-    # Update total entries in KV store
-    local current_total
-    current_total=$(get_kv_total_entries)
-    local new_total=$((current_total + total_rows_written_for_file))
-    update_kv_total_entries "$new_total"
-    
+    local new_total =$(get_total_entries)
+    local difference =$((new_total - current_total))
     # Send Telegram notification
-    local message="Database upload completed: $filename ($total_rows_written_for_file entries processed, total: $new_total)"
+    local message="Database upload completed: $filename ($difference entries processed, total: $new_total)"
     send_telegram "$message"
-    
-    # Update KV store timestamp
-    update_kv_timestamp
     
     # Cleanup local chunks
     rm -r "$CHUNKS_DIR" || {
-        echo "Warning: Failed to remove chunks directory"
+        send_telegram "Warning: Failed to remove chunks directory"
     }
-    echo "Removed chunk directory: $CHUNKS_DIR"
     
     # Remove local SQLite file
     rm "$db_file" || {
-        echo "Warning: Failed to remove local SQLite file: $filename"
+        send_telegram "Warning: Failed to remove local SQLite file: $filename"
     }
-    echo "Removed local SQLite file: $filename"
     
     # Delete remote file after successful processing
     if ! delete_remote_file "$filename"; then
         # Send notification about cleanup failure but don't fail the overall process
         local cleanup_error_msg="Warning: Failed to delete remote file after successful upload: $filename"
         send_telegram "$cleanup_error_msg"
-        echo "$cleanup_error_msg"
     fi
     
-    echo "$total_rows_written_for_file"
     return 0
 }
 
 # --- Main monitoring loop ---
 echo "Starting continuous SQLite monitoring and processing..."
 echo "Remote path: $REMOTE_PATH"
-echo "Monitor interval: $MONITOR_INTERVAL seconds (10 minutes)"
-if [ "$TELEGRAM_ENABLED" = "true" ]; then
-    echo "Telegram notifications: ENABLED"
-else
-    echo "Telegram notifications: DISABLED"
-fi
+echo "Monitor interval: $MONITOR_INTERVAL seconds (1 minute)"
+
 
 # Get and display startup information
 echo ""
-echo "Fetching startup information from KV store..."
-current_total_entries=$(get_kv_total_entries)
-last_update_time=$(get_kv_last_update_time)
+echo "Fetching startup information from database..."
+current_total_entries=$(get_total_entries)
+last_update_time=$(get_last_update_time)
 
 echo "Current total entries in database: $current_total_entries"
 if [ -n "$last_update_time" ] && [ "$last_update_time" != "0" ]; then
-    # Convert timestamp to human-readable format
     last_update_formatted=$(date -r "$last_update_time" 2>/dev/null || echo "Invalid timestamp")
     echo "Last upload time: $last_update_formatted"
 else
     echo "Last upload time: Never"
 fi
 
-# Send startup message to Telegram
-if [ "$TELEGRAM_ENABLED" = "true" ]; then
-    startup_msg="PDA Upload Monitor Started"
-    startup_msg="$startup_msg\nTotal entries: $current_total_entries"
-    if [ -n "$last_update_time" ] && [ "$last_update_time" != "0" ]; then
-        startup_msg="$startup_msg\nLast upload: $last_update_formatted"
-    else
-        startup_msg="$startup_msg\nLast upload: Never"
-    fi
-    send_telegram "$startup_msg"
+startup_msg="PDA Upload Monitor Started"
+startup_msg="$startup_msg\nTotal entries: $current_total_entries"
+if [ -n "$last_update_time" ] && [ "$last_update_time" != "0" ]; then
+    startup_msg="$startup_msg\nLast upload: $last_update_formatted"
+else
+    startup_msg="$startup_msg\nLast upload: Never"
 fi
-
-echo ""
-echo "Press Ctrl+C to stop"
-echo ""
+send_telegram "$startup_msg"
 
 # Create local download directory
 mkdir -p "$LOCAL_DOWNLOAD_DIR" || {
-    echo "ERROR: Failed to create local download directory: $LOCAL_DOWNLOAD_DIR"
+    send_telegram "ERROR: Failed to create local download directory: $LOCAL_DOWNLOAD_DIR"
     exit 1
 }
 
@@ -343,9 +270,7 @@ while true; do
     if [ -z "$downloaded_files" ]; then
         echo "No new SQLite files found. Sleeping for $MONITOR_INTERVAL seconds..."
     else
-        echo "Downloaded files:"
-        echo "$downloaded_files"
-        
+        send_telegram "Downloaded files: $downloaded_files"
         processed_count=0
         failed_count=0
         total_entries=0
@@ -366,7 +291,7 @@ while true; do
                     echo "Failed to process $(basename "$sqlite_file")"
                     failed_count=$((failed_count + 1))
                     # Keep the file for manual inspection
-                    echo "File kept at: $sqlite_file"
+                    send_telegram "File kept at: $sqlite_file"
                     
                     # Send error notification
                     error_msg="ERROR: Failed to process $(basename "$sqlite_file")"
@@ -380,7 +305,7 @@ while true; do
         # Send summary notification if any files were processed successfully
         if [ $processed_count -gt 0 ]; then
             # Get updated total from KV store
-            updated_total=$(get_kv_total_entries)
+            updated_total=$(get_total_entries)
             summary_msg="Batch processing completed: $processed_count files processed, $total_entries entries added (total: $updated_total)"
             if [ $failed_count -gt 0 ]; then
                 summary_msg="$summary_msg, $failed_count failed"
@@ -390,7 +315,7 @@ while true; do
         
         echo "Batch summary: $processed_count processed, $failed_count failed, $total_entries entries added"
         if [ $processed_count -gt 0 ]; then
-            final_total=$(get_kv_total_entries)
+            final_total=$(get_total_entries)
             echo "Database now contains: $final_total total entries"
         fi
         echo "Finished processing all downloaded files. Sleeping for $MONITOR_INTERVAL seconds..."

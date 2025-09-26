@@ -12,21 +12,17 @@ export interface PdaEntry {
   seeds: Seed[];
 }
 
-export interface SearchResponse {
-  query: string | null;
+export interface ApiResponse {
+  query?: {
+    pda?: string;
+    program_id?: string;
+  };
   limit: number;
   offset: number;
   count: number;
   results: PdaEntry[];
-}
-
-export interface ExploreResponse {
-  limit: number;
-  offset: number;
-  count: number;
-  has_next: boolean;
-  has_previous: boolean;
-  next_offset: number;
-  previous_offset: number;
-  results: PdaEntry[];
+  has_next?: boolean;
+  has_previous?: boolean;
+  next_offset?: number;
+  previous_offset?: number;
 }

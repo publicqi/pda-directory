@@ -16,7 +16,7 @@ if [ ! -d "$PATH_PARAM" ]; then
 fi
 
 echo "Starting merge script for path: $PATH_PARAM"
-echo "Running cargo command every 60 minutes..."
+echo "Running cargo command every 2 minutes..."
 
 # Function to run the cargo command
 run_merge() {
@@ -39,8 +39,8 @@ run_merge() {
 # Run the merge command immediately on start
 run_merge
 
-# Then run it every 60 minutes (3600 seconds)
+# Then run it every 2 minutes (120 seconds)
 while true; do
-    sleep 3600  # 60 minutes
+    sleep 120  # 2 minutes
     run_merge
 done
