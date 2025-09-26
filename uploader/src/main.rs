@@ -128,7 +128,8 @@ fn all_valid_files(root: PathBuf) -> Result<Vec<PathBuf>> {
     for entry in fs::read_dir(root)? {
         let entry = entry?;
         let path = entry.path();
-        if path.starts_with("pda_collector_") && path.ends_with(".blob") {
+        let filename = path.file_name().unwrap().to_str().unwrap();
+        if filename.starts_with("pda_collector_") && filename.ends_with(".blob") {
             let metadata = entry.metadata()?;
             let age = metadata.modified()?.duration_since(now)?;
             if age > Duration::from_secs(5) {
