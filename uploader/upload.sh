@@ -100,6 +100,67 @@ update_kv_timestamp() {
     return 0
 }
 
+# Function to get total entries from KV store
+get_kv_total_entries() {
+    local total_entries
+    total_entries=$(npx wrangler kv key get total_entries --binding PDA_METADATA --remote --text 2>/dev/null || echo "0")
+    echo "$total_entries"
+}
+
+# Function to update KV store with total entries
+update_kv_total_entries() {
+    local new_total="$1"
+    echo "Updating KV store with total entries: $new_total"
+    
+    if ! npx wrangler kv key put total_entries "$new_total" --binding PDA_METADATA --remote; then
+        echo "Warning: Failed to update KV store total entries"
+        return 1
+    fi
+    
+    echo "Successfully updated KV store total entries"
+    return 0
+}
+
+# Function to get last update time from KV store
+get_kv_last_update_time() {
+    local last_update
+    last_update=$(npx wrangler kv key get last_update_time --binding PDA_METADATA --remote --text 2>/dev/null || echo "")
+    echo "$last_update"
+}
+
+# Function to delete remote file after successful processing
+delete_remote_file() {
+    local filename="$1"
+    local remote_file_path="${REMOTE_PATH}${filename}"
+    
+    echo "Attempting to delete remote file: $remote_file_path"
+    
+    # Use ssh to delete the remote file if it's an ssh connection
+    if [[ "$REMOTE_PATH" == *":"* ]]; then
+        # Extract hostname and path for SSH-based connections
+        local ssh_host=$(echo "$REMOTE_PATH" | cut -d':' -f1)
+        local remote_dir=$(echo "$REMOTE_PATH" | cut -d':' -f2-)
+        local full_remote_path="${remote_dir}${filename}"
+        
+        if ssh "$ssh_host" "rm -f \"$full_remote_path\"" 2>/dev/null; then
+            echo "Successfully deleted remote file: $remote_file_path"
+            return 0
+        else
+            echo "Warning: Failed to delete remote file: $remote_file_path"
+            return 1
+        fi
+    else
+        # For local paths or other protocols, try direct rm
+        if rm -f "$remote_file_path" 2>/dev/null; then
+            echo "Successfully deleted remote file: $remote_file_path"
+            return 0
+        else
+            echo "Warning: Failed to delete remote file: $remote_file_path"
+            return 1
+        fi
+    fi
+}
+
 # Function to process a single SQLite file
 process_sqlite_file() {
     local db_file="$1"
@@ -196,8 +257,14 @@ process_sqlite_file() {
 
     echo "All chunks for $filename uploaded successfully."
     
+    # Update total entries in KV store
+    local current_total
+    current_total=$(get_kv_total_entries)
+    local new_total=$((current_total + entry_count))
+    update_kv_total_entries "$new_total"
+    
     # Send Telegram notification
-    local message="Database upload completed: $filename ($entry_count entries processed)"
+    local message="Database upload completed: $filename ($entry_count entries processed, total: $new_total)"
     send_telegram "$message"
     
     # Update KV store timestamp
@@ -215,6 +282,14 @@ process_sqlite_file() {
     }
     echo "Removed local SQLite file: $filename"
     
+    # Delete remote file after successful processing
+    if ! delete_remote_file "$filename"; then
+        # Send notification about cleanup failure but don't fail the overall process
+        local cleanup_error_msg="Warning: Failed to delete remote file after successful upload: $filename"
+        send_telegram "$cleanup_error_msg"
+        echo "$cleanup_error_msg"
+    fi
+    
     return 0
 }
 
@@ -227,6 +302,35 @@ if [ "$TELEGRAM_ENABLED" = "true" ]; then
 else
     echo "Telegram notifications: DISABLED"
 fi
+
+# Get and display startup information
+echo ""
+echo "Fetching startup information from KV store..."
+current_total_entries=$(get_kv_total_entries)
+last_update_time=$(get_kv_last_update_time)
+
+echo "Current total entries in database: $current_total_entries"
+if [ -n "$last_update_time" ] && [ "$last_update_time" != "0" ]; then
+    # Convert timestamp to human-readable format
+    last_update_formatted=$(date -r "$last_update_time" 2>/dev/null || echo "Invalid timestamp")
+    echo "Last upload time: $last_update_formatted"
+else
+    echo "Last upload time: Never"
+fi
+
+# Send startup message to Telegram
+if [ "$TELEGRAM_ENABLED" = "true" ]; then
+    startup_msg="PDA Upload Monitor Started"
+    startup_msg="$startup_msg\nTotal entries: $current_total_entries"
+    if [ -n "$last_update_time" ] && [ "$last_update_time" != "0" ]; then
+        startup_msg="$startup_msg\nLast upload: $last_update_formatted"
+    else
+        startup_msg="$startup_msg\nLast upload: Never"
+    fi
+    send_telegram "$startup_msg"
+fi
+
+echo ""
 echo "Press Ctrl+C to stop"
 echo ""
 
@@ -243,10 +347,10 @@ while true; do
     echo "$(date): Checking for new SQLite files..."
     
     # Download SQLite files from remote using rsync
-    # Using --remove-source-files to delete remote files after successful transfer
+    # NOT using --remove-source-files to ensure files are only deleted after successful D1 upload
     # Using --include and --exclude to only sync .sqlite files
     downloaded_files=""
-    if ! downloaded_files=$(rsync -av --remove-source-files \
+    if ! downloaded_files=$(rsync -av \
         --include="*.sqlite" \
         --exclude="*" \
         "$REMOTE_PATH" "$LOCAL_DOWNLOAD_DIR/" 2>/dev/null | grep -E "\.sqlite$" || true); then
@@ -261,9 +365,9 @@ while true; do
         echo "Downloaded files:"
         echo "$downloaded_files"
         
-        local processed_count=0
-        local failed_count=0
-        local total_entries=0
+        processed_count=0
+        failed_count=0
+        total_entries=0
         
         # Process each downloaded SQLite file
         for sqlite_file in "$LOCAL_DOWNLOAD_DIR"/*.sqlite; do
@@ -272,7 +376,6 @@ while true; do
                 echo "=== Processing $(basename "$sqlite_file") ==="
                 
                 # Count entries before processing for summary
-                local file_entries
                 file_entries=$(count_sqlite_entries "$sqlite_file")
                 
                 if process_sqlite_file "$sqlite_file"; then
@@ -286,7 +389,7 @@ while true; do
                     echo "File kept at: $sqlite_file"
                     
                     # Send error notification
-                    local error_msg="ERROR: Failed to process $(basename "$sqlite_file")"
+                    error_msg="ERROR: Failed to process $(basename "$sqlite_file")"
                     send_telegram "$error_msg"
                 fi
                 echo "=== Finished processing $(basename "$sqlite_file") ==="
@@ -296,14 +399,20 @@ while true; do
         
         # Send summary notification if any files were processed successfully
         if [ $processed_count -gt 0 ]; then
-            local summary_msg="Batch processing completed: $processed_count files processed, $total_entries total entries"
+            # Get updated total from KV store
+            updated_total=$(get_kv_total_entries)
+            summary_msg="Batch processing completed: $processed_count files processed, $total_entries entries added (total: $updated_total)"
             if [ $failed_count -gt 0 ]; then
                 summary_msg="$summary_msg, $failed_count failed"
             fi
             send_telegram "$summary_msg"
         fi
         
-        echo "Batch summary: $processed_count processed, $failed_count failed, $total_entries total entries"
+        echo "Batch summary: $processed_count processed, $failed_count failed, $total_entries entries added"
+        if [ $processed_count -gt 0 ]; then
+            final_total=$(get_kv_total_entries)
+            echo "Database now contains: $final_total total entries"
+        fi
         echo "Finished processing all downloaded files. Sleeping for $MONITOR_INTERVAL seconds..."
     fi
     
