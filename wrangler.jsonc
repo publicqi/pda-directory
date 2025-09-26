@@ -1,5 +1,6 @@
 {
     "name": "pda-directory",
+    "main": "apps/backend/src/index.ts",
     "compatibility_date": "2025-09-26",
     "assets": {
         "directory": "apps/frontend/dist"

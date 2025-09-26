@@ -1,15 +1,33 @@
-import { serve } from '@hono/node-server';
+import type { KVNamespace } from '@cloudflare/workers-types';
 import { Hono } from 'hono';
 
-const app = new Hono();
+const LAST_UPDATE_KEY = 'last_update_time';
 
-app.get('/', (c) => c.json({ status: 'ok' }));
+type Env = {
+  Bindings: {
+    PDA_LAST_UPDATE: KVNamespace;
+  };
+};
 
-const port = Number(process.env.PORT) || 8787;
+const app = new Hono<Env>();
 
-console.log(`Backend listening on http://localhost:${port}`);
+app.get('/healthz', (c) => c.json({ status: 'ok' }));
 
-serve({
-  fetch: app.fetch,
-  port,
+app.get('/last_update_time', async (c) => {
+  const kv = c.env.PDA_LAST_UPDATE;
+
+  if (!kv) {
+    // Surface configuration mistakes early instead of returning stale data.
+    return c.json({ error: 'KV namespace PDA_LAST_UPDATE is not configured' }, 500);
+  }
+
+  const lastUpdate = await kv.get(LAST_UPDATE_KEY);
+
+  if (!lastUpdate) {
+    return c.json({ lastUpdateTime: null });
+  }
+
+  return c.json({ lastUpdateTime: lastUpdate });
 });
+
+export default app;
