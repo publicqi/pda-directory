@@ -211,6 +211,7 @@ async function fetchPdas(
   }
 
   return response.results.map((row) => {
+    console.log(row);
     const pda = toUint8Array(row.pda, 'pda');
     const programId = toUint8Array(row.program_id, 'program_id');
     const seedBytes = toUint8Array(row.seed_bytes, 'seed_bytes');
