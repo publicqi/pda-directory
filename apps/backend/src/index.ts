@@ -1,4 +1,4 @@
-import type { KVNamespace } from '@cloudflare/workers-types';
+import type { Fetcher, KVNamespace } from '@cloudflare/workers-types';
 import { Hono } from 'hono';
 
 const LAST_UPDATE_KEY = 'last_update_time';
@@ -6,14 +6,25 @@ const LAST_UPDATE_KEY = 'last_update_time';
 type Env = {
   Bindings: {
     PDA_LAST_UPDATE: KVNamespace;
+    ASSETS: Fetcher;
   };
 };
 
 const app = new Hono<Env>();
 
+// Serve the frontend for non-API requests.
+app.use('*', async (c, next) => {
+  const url = new URL(c.req.url);
+  if (url.hostname.startsWith('api.')) {
+    await next();
+  } else {
+    return c.env.ASSETS.fetch(c.req.raw);
+  }
+});
+
 app.get('/healthz', (c) => c.json({ status: 'ok' }));
 
-app.get('/api/last_update_time', async (c) => {
+app.get('/last_update_time', async (c) => {
   const kv = c.env.PDA_LAST_UPDATE;
 
   if (!kv) {
