@@ -1,0 +1,24 @@
+# Node
+node_modules
+apps/*/node_modules
+apps/frontend/dist
+apps/backend/dist
+
+# Python/uv
+.venv
+__pycache__
+*.pyc
+*.pyo
+.ruff_cache
+
+# macOS
+.DS_Store
+
+# Data
+*.sqlite
+!data/.gitkeep
+
+openchain-monorepo
+
+# Rust
+uploader/target

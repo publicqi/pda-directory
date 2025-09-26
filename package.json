@@ -1,0 +1,21 @@
+{
+  "name": "pda-directory",
+  "private": true,
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspace @pda/frontend",
+    "dev:frontend": "npm run dev --workspace @pda/frontend",
+    "dev:backend": "npm run dev --workspace @pda/backend",
+    "build": "npm run build --workspace @pda/frontend && npm run build --workspace @pda/backend",
+    "build:frontend": "npm run build --workspace @pda/frontend",
+    "build:backend": "npm run build --workspace @pda/backend",
+    "preview": "npm run preview --workspace @pda/frontend",
+    "start:backend": "npm run start --workspace @pda/backend"
+  },
+  "devDependencies": {
+    "@types/node": "^20.12.7",
+    "typescript": "^5.4.5"
+  }
+}
