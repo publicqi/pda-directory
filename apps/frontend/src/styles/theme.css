@@ -423,7 +423,7 @@ input {
   pointer-events: none;
 }
 
-.seed-interactive-container.hovered::before {
+.seed-interactive-container:hover::before {
   opacity: 1;
 }
 
@@ -471,7 +471,7 @@ input {
   transition: opacity 0.2s ease;
 }
 
-.seed-interactive-container.hovered .seed-actions {
+.seed-interactive-container:hover .seed-actions {
   opacity: 1;
 }
 
@@ -587,7 +587,7 @@ input {
   pointer-events: none;
 }
 
-.pubkey-display.pubkey-hovered::before {
+.pubkey-display:hover::before {
   opacity: 1;
 }
 
@@ -603,7 +603,7 @@ input {
   transition: opacity 0.2s ease;
 }
 
-.pubkey-display.pubkey-hovered .pubkey-actions {
+.pubkey-display:hover .pubkey-actions {
   opacity: 1;
 }
 

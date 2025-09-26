@@ -1,10 +1,10 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 
-const useCopyToClipboard = (text: string, timeout = 2000) => {
+const useCopyToClipboard = (timeout = 2000) => {
     const [copied, setCopied] = useState(false);
     const timeoutId = useRef<number | undefined>();
 
-    const copy = useCallback(() => {
+    const copy = useCallback((text: string) => {
         navigator.clipboard.writeText(text).then(
             () => {
                 setCopied(true);
@@ -15,7 +15,7 @@ const useCopyToClipboard = (text: string, timeout = 2000) => {
                 console.error('Failed to copy: ', err);
             },
         );
-    }, [text, timeout]);
+    }, [timeout]);
 
     useEffect(() => {
         return () => {

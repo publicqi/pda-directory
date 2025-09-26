@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import useCopyToClipboard from '../hooks/useCopyToClipboard';
 
 interface PubkeyDisplayProps {
   pubkey: string;
@@ -6,16 +6,12 @@ interface PubkeyDisplayProps {
 }
 
 const PubkeyDisplay = ({ pubkey, className = 'value-mono' }: PubkeyDisplayProps) => {
-  const [isHovered, setIsHovered] = useState(false);
+  const { copy } = useCopyToClipboard();
 
-  const handleCopy = async (e: React.MouseEvent) => {
+  const handleCopy = (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    try {
-      await navigator.clipboard.writeText(pubkey);
-    } catch (err) {
-      console.error('Failed to copy pubkey:', err);
-    }
+    copy(pubkey);
   };
 
   const handleSolscanClick = (e: React.MouseEvent) => {
@@ -25,11 +21,7 @@ const PubkeyDisplay = ({ pubkey, className = 'value-mono' }: PubkeyDisplayProps)
   };
 
   return (
-    <div
-      className={`pubkey-display ${className} ${isHovered ? 'pubkey-hovered' : ''}`}
-      onMouseEnter={() => setIsHovered(true)}
-      onMouseLeave={() => setIsHovered(false)}
-    >
+    <div className={`pubkey-display ${className}`}>
       <span className="pubkey-text">{pubkey}</span>
       <div className="pubkey-actions">
         <button

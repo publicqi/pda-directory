@@ -1,59 +1,10 @@
 import { FormEvent, useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 
-import { API_BASE_URL } from '../config';
 import Header from '../components/Header';
 import PdaEntryCard from '../components/PdaEntryCard';
-import { PdaEntry, ApiResponse } from '../types/api';
-
-// Solana API utility function
-const checkIfAddressIsExecutable = async (address: string): Promise<boolean | null> => {
-  try {
-    const response = await fetch('https://api.mainnet-beta.solana.com', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        jsonrpc: '2.0',
-        id: 1,
-        method: 'getAccountInfo',
-        params: [
-          address,
-          {
-            commitment: 'finalized',
-            encoding: 'base58',
-            dataSlice: {
-              length: 0
-            }
-          }
-        ]
-      })
-    });
-
-    if (!response.ok) {
-      return null;
-    }
-
-    const data = await response.json();
-
-    // If there's an error in the response, return null
-    if (data.error) {
-      return null;
-    }
-
-    // If account doesn't exist, return null
-    if (!data.result || !data.result.value) {
-      return null;
-    }
-
-    // Check if the account is executable
-    return data.result.value.executable === true;
-  } catch (error) {
-    console.warn('Error checking if address is executable:', error);
-    return null;
-  }
-};
+import PaginationControls from '../components/PaginationControls';
+import { useSignaturesFetch } from '../hooks/useSignaturesFetch';
 
 const SignaturesPage = () => {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -62,112 +13,27 @@ const SignaturesPage = () => {
   const searchInputRef = useRef<HTMLInputElement>(null);
 
   const [query, setQuery] = useState(queryFromUrl);
-  const [isSearching, setIsSearching] = useState(false);
-  const [isExploring, setIsExploring] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [entries, setEntries] = useState<PdaEntry[]>([]);
-  const [hasLoaded, setHasLoaded] = useState(false);
-  const [apiResponse, setApiResponse] = useState<ApiResponse | null>(null);
   const isSearchMode = !!queryFromUrl;
-  const isLoading = isSearching || isExploring;
 
+  const {
+    isLoading,
+    isSearching,
+    isExploring,
+    hasLoaded,
+    entries,
+    apiResponse,
+    error,
+  } = useSignaturesFetch({
+    query: queryFromUrl,
+    offset: offsetFromUrl,
+    isSearchMode,
+  });
+
+
+  // Sync local query state with URL changes (browser back/forward, bookmarks)
   useEffect(() => {
-    const controller = new AbortController();
-    const { signal } = controller;
-
-    const fetchPdas = async (pdaOrProgramId: string | null, offset: number, searchType: 'pda' | 'program_id') => {
-      const body: { [key: string]: string | number } = { offset };
-      if (pdaOrProgramId) {
-        body[searchType] = pdaOrProgramId;
-      }
-
-      const response = await fetch(`${API_BASE_URL}/api/pda/query`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(body),
-        signal,
-      });
-      if (!response.ok) {
-        const message = await response.text();
-        throw new Error(message || `Request failed with status ${response.status}`);
-      }
-      return response.json() as Promise<ApiResponse>;
-    };
-
-    const searchWithAutoDetection = async (address: string, offset: number): Promise<ApiResponse> => {
-      // First, try to determine if the address is executable (program)
-      const isExecutable = await checkIfAddressIsExecutable(address);
-
-      if (isExecutable === true) {
-        // Address is executable, search as program_id
-        return await fetchPdas(address, offset, 'program_id');
-      } else if (isExecutable === false) {
-        // Address is not executable, search as pda
-        return await fetchPdas(address, offset, 'pda');
-      } else {
-        // API call failed or returned null, try both approaches
-        // First try PDA search
-        try {
-          const pdaResults = await fetchPdas(address, offset, 'pda');
-          if (pdaResults.results.length > 0) {
-            return pdaResults;
-          }
-        } catch (error) {
-          // PDA search failed, continue to program_id search
-        }
-
-        // If PDA search returned no results or failed, try program_id search
-        return await fetchPdas(address, offset, 'program_id');
-      }
-    };
-
-    const fetchData = async () => {
-      const trimmedQuery = queryFromUrl.trim();
-      setError(null);
-      setQuery(queryFromUrl);
-
-      try {
-        if (isSearchMode) {
-          setIsSearching(true);
-        } else {
-          setIsExploring(true);
-        }
-
-        let data: ApiResponse;
-        if (isSearchMode && trimmedQuery) {
-          // Use auto-detection for search mode
-          data = await searchWithAutoDetection(trimmedQuery, offsetFromUrl);
-        } else {
-          // For exploration mode (no search query), use the original logic
-          data = await fetchPdas(null, offsetFromUrl, 'pda');
-        }
-
-        setEntries(data.results);
-        setApiResponse(data);
-        setHasLoaded(true);
-      } catch (caught) {
-        if (caught instanceof Error && caught.name === 'AbortError') {
-          return;
-        }
-        const message = caught instanceof Error ? caught.message : 'Unknown error';
-        setError(message);
-        setEntries([]);
-      } finally {
-        if (!signal.aborted) {
-          setIsSearching(false);
-          setIsExploring(false);
-        }
-      }
-    };
-
-    void fetchData();
-
-    return () => {
-      controller.abort();
-    };
-  }, [queryFromUrl, offsetFromUrl, isSearchMode]);
+    setQuery(queryFromUrl);
+  }, [queryFromUrl]);
 
   // Auto-focus search input on page load
   useEffect(() => {
@@ -182,8 +48,10 @@ const SignaturesPage = () => {
 
     if (trimmed) {
       setSearchParams({ q: trimmed });
+      setQuery(trimmed); // Update local state to show trimmed value immediately
     } else {
       setSearchParams({});
+      setQuery(''); // Clear local state immediately
     }
   };
 
@@ -194,13 +62,17 @@ const SignaturesPage = () => {
 
   const handlePreviousPage = () => {
     if (apiResponse?.has_previous) {
-      setSearchParams({ offset: String(apiResponse.previous_offset) });
+      const params = new URLSearchParams(searchParams);
+      params.set('offset', String(apiResponse.previous_offset));
+      setSearchParams(params);
     }
   };
 
   const handleNextPage = () => {
     if (apiResponse?.has_next) {
-      setSearchParams({ offset: String(apiResponse.next_offset) });
+      const params = new URLSearchParams(searchParams);
+      params.set('offset', String(apiResponse.next_offset));
+      setSearchParams(params);
     }
   };
 
@@ -262,24 +134,13 @@ const SignaturesPage = () => {
               )}
             </span>
             {!isSearchMode && apiResponse && (
-              <div className="pagination-controls">
-                <button
-                  type="button"
-                  onClick={handlePreviousPage}
-                  disabled={!apiResponse.has_previous || isExploring}
-                  className="pagination-button"
-                >
-                  ← Previous
-                </button>
-                <button
-                  type="button"
-                  onClick={handleNextPage}
-                  disabled={!apiResponse.has_next || isExploring}
-                  className="pagination-button"
-                >
-                  Next →
-                </button>
-              </div>
+              <PaginationControls
+                apiResponse={apiResponse}
+                isLoading={isExploring}
+                onPreviousPage={handlePreviousPage}
+                onNextPage={handleNextPage}
+                variant="inline"
+              />
             )}
           </div>
         ) : null}
@@ -311,27 +172,14 @@ const SignaturesPage = () => {
 
         {!error && hasLoaded && !isSearchMode && apiResponse && entries.length > 0 ? (
           <div className="pagination-footer">
-            <div className="pagination-controls">
-              <button
-                type="button"
-                onClick={handlePreviousPage}
-                disabled={!apiResponse.has_previous || isExploring}
-                className="pagination-button"
-              >
-                ← Previous Page
-              </button>
-              <span className="pagination-info">
-                Page {currentPage}
-              </span>
-              <button
-                type="button"
-                onClick={handleNextPage}
-                disabled={!apiResponse.has_next || isExploring}
-                className="pagination-button"
-              >
-                Next Page →
-              </button>
-            </div>
+            <PaginationControls
+              apiResponse={apiResponse}
+              isLoading={isExploring}
+              onPreviousPage={handlePreviousPage}
+              onNextPage={handleNextPage}
+              currentPage={currentPage}
+              variant="footer"
+            />
           </div>
         ) : null}
       </div>

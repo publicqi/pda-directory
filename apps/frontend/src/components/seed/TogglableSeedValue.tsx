@@ -13,8 +13,7 @@ type Presentation = 'A' | 'B';
 const TogglableSeedValue = ({ valueA, valueB, label, badgeClass = '' }: TogglableSeedValueProps) => {
     const [presentation, setPresentation] = useState<Presentation>('A');
     const displayValue = presentation === 'A' ? valueA : valueB;
-    const { copy, copied } = useCopyToClipboard(displayValue);
-    const [isHovered, setIsHovered] = useState(false);
+    const { copy, copied } = useCopyToClipboard();
     const refA = useRef<HTMLSpanElement>(null);
     const refB = useRef<HTMLSpanElement>(null);
     const [faderWidth, setFaderWidth] = useState<number | 'auto'>('auto');
@@ -45,7 +44,7 @@ const TogglableSeedValue = ({ valueA, valueB, label, badgeClass = '' }: Togglabl
     const handleCopyClick = (e: React.MouseEvent) => {
         e.preventDefault();
         e.stopPropagation();
-        copy();
+        copy(displayValue);
     };
 
     return (
@@ -53,11 +52,7 @@ const TogglableSeedValue = ({ valueA, valueB, label, badgeClass = '' }: Togglabl
             <div className="seed-tag">
                 <span className={`badge ${badgeClass}`}>{label}</span>
             </div>
-            <div
-                className={`seed-interactive-container ${isHovered ? 'hovered' : ''}`}
-                onMouseEnter={() => setIsHovered(true)}
-                onMouseLeave={() => setIsHovered(false)}
-            >
+            <div className="seed-interactive-container">
                 <div
                     onClick={handleToggle}
                     onKeyDown={handleKeyDown}

@@ -318,7 +318,7 @@ export const createApp = (): Hono<Env> => {
       rows = await fetchPdas(database, { pdaBytes, programIdBytes, limit, offset });
     } catch (error) {
       console.error('Failed to fetch PDAs', error);
-      throw new HTTPException(500, { message: 'Failed to read from PDA directory. Maybe database is uploading... Try again in later.' });
+      throw new HTTPException(500, { message: 'Failed to read from PDA directory. Maybe database is uploading... Try again later.' });
     }
 
     const entries = rows.map((row) => {
