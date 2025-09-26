@@ -43,4 +43,6 @@ app.get('/last_update_time', async (c) => {
   return c.json({ lastUpdateTime: lastUpdate });
 });
 
+app.all('*', (c) => c.json({ error: 'Invalid request' }, 400));
+
 export default app;
