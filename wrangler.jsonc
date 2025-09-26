@@ -16,8 +16,8 @@
     ],
     "kv_namespaces": [
         {
-            "binding": "PDA_LAST_UPDATE",
-            "id": "0b746797cd2d4fde8362f79fd390fce5"
+            "binding": "PDA_METADATA",
+            "id": "4d008d542913447296e7ff758e0ef3fc"
         }
     ],
     "observability": {

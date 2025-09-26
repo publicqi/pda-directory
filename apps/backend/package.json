@@ -6,9 +6,11 @@
   "scripts": {
     "dev": "wrangler dev --config ../../wrangler.jsonc",
     "build": "tsc --project tsconfig.json",
-    "start": "wrangler dev --config ../../wrangler.jsonc"
+    "start": "wrangler dev --config ../../wrangler.jsonc",
+    "test": "NODE_OPTIONS=--import=tsx node --test tests/index.test.ts"
   },
   "dependencies": {
+    "base58-js": "^1.0.4",
     "hono": "^4.3.10"
   },
   "devDependencies": {

@@ -91,7 +91,7 @@ update_kv_timestamp() {
     local timestamp=$(date +%s)
     echo "Updating KV store with timestamp: $timestamp"
     
-    if ! npx wrangler kv key put last_update_time "$timestamp" --binding PDA_LAST_UPDATE --remote; then
+    if ! npx wrangler kv key put last_update_time "$timestamp" --binding PDA_METADATA --remote; then
         echo "Warning: Failed to update KV store timestamp"
         return 1
     fi

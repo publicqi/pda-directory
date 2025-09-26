@@ -22,3 +22,7 @@ openchain-monorepo
 
 # Rust
 uploader/target
+
+.wrangler/
+
+.env
