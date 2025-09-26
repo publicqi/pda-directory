@@ -13,7 +13,7 @@ const app = new Hono<Env>();
 
 app.get('/healthz', (c) => c.json({ status: 'ok' }));
 
-app.get('/last_update_time', async (c) => {
+app.get('/api/last_update_time', async (c) => {
   const kv = c.env.PDA_LAST_UPDATE;
 
   if (!kv) {

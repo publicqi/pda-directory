@@ -18,5 +18,10 @@
             "binding": "PDA_LAST_UPDATE",
             "id": "0b746797cd2d4fde8362f79fd390fce5"
         }
-    ]
+    ],
+    "observability": {
+        "logs": {
+            "enabled": true
+        }
+    }
 }
