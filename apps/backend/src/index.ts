@@ -36,35 +36,12 @@ type ListParams = {
   offset: number;
 };
 
-const isTypedArray = (value: unknown): value is ArrayBufferView => ArrayBuffer.isView(value);
-
-function toUint8Array(value: unknown, fieldName: string): Uint8Array {
-  if (value instanceof Uint8Array) {
-    return new Uint8Array(value);
-  }
-
-  if (value instanceof ArrayBuffer) {
-    return new Uint8Array(value);
-  }
-
-  if (isTypedArray(value)) {
-    return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
-  }
-
-  if (typeof value === 'string') {
-    const normalized = value.startsWith('0x') ? value.slice(2) : value;
-    if (normalized.length % 2 !== 0 || /[^0-9a-fA-F]/.test(normalized)) {
-      throw new Error(`Value for ${fieldName} is not a valid hex string`);
-    }
-
-    const bytes = new Uint8Array(normalized.length / 2);
-    for (let i = 0; i < normalized.length; i += 2) {
-      bytes[i / 2] = Number.parseInt(normalized.slice(i, i + 2), 16);
-    }
-    return bytes;
-  }
-
-  throw new Error(`Value for ${fieldName} is not bytes-like`);
+// D1 returns BLOBs as Array<number> on reads. Convert directly.
+function fromD1Blob(value: unknown, fieldName: string): Uint8Array {
+  if (Array.isArray(value)) return Uint8Array.from(value);
+  if (value instanceof Uint8Array) return value;
+  if (value instanceof ArrayBuffer) return new Uint8Array(value);
+  throw new Error(`${fieldName} must be a D1 BLOB (Array<number>).`);
 }
 
 function assertExactByteLength(value: Uint8Array, expected: number, fieldName: string): void {
@@ -126,13 +103,9 @@ function readUint32LE(view: Uint8Array, offset: number): number {
   ) >>> 0;
 }
 
-function decodeSeedBlob(blob: ArrayBuffer | Uint8Array): Uint8Array[] {
-  const view = blob instanceof Uint8Array ? blob : new Uint8Array(blob);
+function decodeSeedBlob(view: Uint8Array): Uint8Array[] {
   const totalLength = view.byteLength;
-
-  if (totalLength < 4) {
-    throw new Error('Seed blob too short to contain seed count');
-  }
+  if (totalLength < 4) throw new Error('Seed blob too short to contain seed count');
 
   let offset = 0;
   const seedCount = readUint32LE(view, offset);
@@ -147,25 +120,14 @@ function decodeSeedBlob(blob: ArrayBuffer | Uint8Array): Uint8Array[] {
     const length = readUint32LE(view, offset);
     offset += 4;
 
-    if (length < 0) {
-      throw new Error('Seed length must be non-negative');
-    }
-
-    if (offset + length > totalLength) {
-      throw new Error('Seed blob truncated during payload read');
-    }
+    if (offset + length > totalLength) throw new Error('Seed blob truncated during payload read');
 
     seeds.push(view.slice(offset, offset + length));
     offset += length;
   }
 
-  if (offset !== totalLength) {
-    throw new Error('Seed blob has trailing data after decoding seeds');
-  }
-
-  if (seeds.length !== seedCount) {
-    throw new Error('Seed blob reported seed count mismatch');
-  }
+  if (offset !== totalLength) throw new Error('Seed blob has trailing data after decoding seeds');
+  if (seeds.length !== seedCount) throw new Error('Seed blob reported seed count mismatch');
 
   return seeds;
 }
@@ -204,26 +166,27 @@ async function fetchPdas(
   params.push(limit, offset);
 
   const statement = db.prepare(sql).bind(...params);
-  const response = await statement.all<Record<string, unknown>>();
+  type Row = {
+    pda: number[] | Uint8Array | ArrayBuffer;
+    program_id: number[] | Uint8Array | ArrayBuffer;
+    seed_bytes: number[] | Uint8Array | ArrayBuffer;
+  };
+
+  const response = await statement.all<Row>();
 
   if (!response.success || !response.results) {
     return [];
   }
 
   return response.results.map((row) => {
-    console.log(row);
-    const pda = toUint8Array(row.pda, 'pda');
-    const programId = toUint8Array(row.program_id, 'program_id');
-    const seedBytes = toUint8Array(row.seed_bytes, 'seed_bytes');
+    const pda = fromD1Blob(row.pda, 'pda');
+    const programId = fromD1Blob(row.program_id, 'program_id');
+    const seedBytes = fromD1Blob(row.seed_bytes, 'seed_bytes');
 
     assertExactByteLength(pda, 32, 'pda');
     assertExactByteLength(programId, 32, 'program_id');
 
-    return {
-      pda,
-      programId,
-      seedBytes,
-    } satisfies PdaRecord;
+    return { pda, programId, seedBytes } as PdaRecord;
   });
 }
 
