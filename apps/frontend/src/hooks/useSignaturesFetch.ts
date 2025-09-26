@@ -3,7 +3,7 @@ import { API_BASE_URL } from '../config';
 import { ApiResponse } from '../types/api';
 
 // State machine for fetch operations
-type FetchState = 
+type FetchState =
   | { status: 'idle' }
   | { status: 'searching' }
   | { status: 'exploring' }
@@ -41,7 +41,7 @@ const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 const checkIfAddressIsExecutable = async (address: string): Promise<boolean | null> => {
   const now = Date.now();
   const cached = executableCache.get(address);
-  
+
   if (cached && (now - cached.timestamp) < CACHE_TTL) {
     return cached.result;
   }
@@ -62,7 +62,8 @@ const checkIfAddressIsExecutable = async (address: string): Promise<boolean | nu
             commitment: 'finalized',
             encoding: 'base58',
             dataSlice: {
-              length: 0
+              length: 0,
+              offset: 0
             }
           }
         ]
@@ -101,8 +102,8 @@ export function useSignaturesFetch({ query, offset, isSearchMode }: UseSignature
   const [state, dispatch] = useReducer(fetchReducer, { status: 'idle' });
 
   const fetchPdas = useCallback(async (
-    pdaOrProgramId: string | null, 
-    offset: number, 
+    pdaOrProgramId: string | null,
+    offset: number,
     searchType: 'pda' | 'program_id',
     signal: AbortSignal
   ): Promise<ApiResponse> => {
@@ -129,8 +130,8 @@ export function useSignaturesFetch({ query, offset, isSearchMode }: UseSignature
   }, []);
 
   const searchWithAutoDetection = useCallback(async (
-    address: string, 
-    offset: number, 
+    address: string,
+    offset: number,
     signal: AbortSignal
   ): Promise<ApiResponse> => {
     const isExecutable = await checkIfAddressIsExecutable(address);
@@ -160,7 +161,7 @@ export function useSignaturesFetch({ query, offset, isSearchMode }: UseSignature
 
     const fetchData = async () => {
       const trimmedQuery = query?.trim();
-      
+
       try {
         if (isSearchMode && trimmedQuery) {
           dispatch({ type: 'START_SEARCH' });

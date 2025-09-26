@@ -133,7 +133,7 @@ const SignaturesPage = () => {
                 </span>
               )}
             </span>
-            {!isSearchMode && apiResponse && (
+            {apiResponse && (
               <PaginationControls
                 apiResponse={apiResponse}
                 isLoading={isExploring}
@@ -170,7 +170,7 @@ const SignaturesPage = () => {
             : null}
         </div>
 
-        {!error && hasLoaded && !isSearchMode && apiResponse && entries.length > 0 ? (
+        {!error && hasLoaded && apiResponse && entries.length > 0 ? (
           <div className="pagination-footer">
             <PaginationControls
               apiResponse={apiResponse}
