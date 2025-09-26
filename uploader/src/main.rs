@@ -1,7 +1,3 @@
-// two subcommands:
-// 1. one time merge (into one sqlite)
-// 2. loop upload
-
 use std::{
     cmp,
     fs::{self, File},
@@ -34,7 +30,6 @@ struct Args {
 #[derive(Debug, Subcommand)]
 enum Command {
     Merge(MergeArgs),
-    Upload(UploadArgs),
 }
 
 #[derive(Debug, Parser)]
@@ -44,12 +39,6 @@ struct MergeArgs {
 
     #[arg(short, long)]
     output: PathBuf,
-}
-
-#[derive(Debug, Parser)]
-struct UploadArgs {
-    #[arg(short, long)]
-    path: PathBuf,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -77,16 +66,7 @@ async fn main() {
             Ok(_) => println!("Merged successfully"),
             Err(e) => println!("Failed to merge: {e}"),
         },
-        Command::Upload(args) => match upload_loop(args).await {
-            Ok(_) => println!("Uploaded successfully"),
-            Err(e) => println!("Failed to upload: {e}"),
-        },
     }
-}
-
-#[allow(unused)]
-async fn upload_loop(args: UploadArgs) -> Result<()> {
-    Ok(())
 }
 
 fn merge(args: MergeArgs) -> Result<()> {
