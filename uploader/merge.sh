@@ -26,7 +26,7 @@ run_merge() {
     echo "$(date): Running merge command..."
     echo "Output file: $output_file"
     
-    cargo run -r -- merge --path "$PATH_PARAM" --output "$output_file"
+    cargo run -r -- merge --path "$PATH_PARAM" --output "$output_file" --dedup-hashset-file /tmp/dedup
     
     if [ $? -eq 0 ]; then
         echo "$(date): Merge completed successfully"
