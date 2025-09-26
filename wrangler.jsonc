@@ -3,5 +3,19 @@
     "compatibility_date": "2025-09-26",
     "assets": {
         "directory": "apps/frontend/dist"
-    }
+    },
+    "upload_source_maps": false,
+    "d1_databases": [
+        {
+            "binding": "pda_directory",
+            "database_name": "pda-directory",
+            "database_id": "65dbe413-7fa7-49e4-af70-988458f76fe1"
+        }
+    ],
+    "kv_namespaces": [
+        {
+            "binding": "PDA_LAST_UPDATE",
+            "id": "0b746797cd2d4fde8362f79fd390fce5"
+        }
+    ]
 }
