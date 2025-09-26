@@ -1,7 +1,7 @@
 {
     "name": "pda-directory",
     "main": "apps/backend/src/index.ts",
-    "compatibility_date": "2025-09-26",
+    "compatibility_date": "2025-09-20",
     "assets": {
         "directory": "apps/frontend/dist"
     },
@@ -23,5 +23,15 @@
         "logs": {
             "enabled": true
         }
-    }
+    },
+    "routes": [
+        {
+            "pattern": "pda.directory",
+            "custom_domain": true
+        },
+        {
+            "pattern": "api.pda.directory",
+            "custom_domain": true
+        }
+    ]
 }
