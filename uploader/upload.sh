@@ -7,6 +7,11 @@
 # Exit immediately if a command exits with a non-zero status.
 set -e
 
+if ! command -v jq &> /dev/null; then
+    echo "Error: jq is not installed. Please install it to continue."
+    exit 1
+fi
+
 # Load environment variables if .env file exists
 if [ -f ".env" ]; then
     source .env
@@ -62,28 +67,6 @@ send_telegram() {
         echo "Warning: Failed to send Telegram notification"
         return 1
     }
-}
-
-# Function to count entries in SQLite file
-count_sqlite_entries() {
-    local db_file="$1"
-    local count=0
-    
-    # Get list of all tables and sum their row counts
-    local tables
-    tables=$(sqlite3 "$db_file" ".tables" 2>/dev/null | tr ' ' '\n' | grep -v '^$' || echo "")
-    
-    if [ -n "$tables" ]; then
-        while IFS= read -r table; do
-            if [ -n "$table" ]; then
-                local table_count
-                table_count=$(sqlite3 "$db_file" "SELECT COUNT(*) FROM \"$table\";" 2>/dev/null || echo "0")
-                count=$((count + table_count))
-            fi
-        done <<< "$tables"
-    fi
-    
-    echo "$count"
 }
 
 # Function to update KV store with timestamp
@@ -165,22 +148,8 @@ delete_remote_file() {
 process_sqlite_file() {
     local db_file="$1"
     local filename=$(basename "$db_file")
-    local entry_count=0
     
     echo "Processing SQLite file: $filename"
-    
-    # Count entries before processing
-    echo "Counting entries in $filename..."
-    entry_count=$(count_sqlite_entries "$db_file")
-    echo "Found $entry_count total entries in $filename"
-    
-    # Skip processing if no entries
-    if [ "$entry_count" -eq 0 ]; then
-        echo "No entries found in $filename. Skipping processing."
-        rm "$db_file"
-        echo "Removed empty SQLite file: $filename"
-        return 0
-    fi
     
     # Clean up previous chunks if they exist
     if [ -d "$CHUNKS_DIR" ]; then
@@ -223,6 +192,7 @@ process_sqlite_file() {
     # Upload chunks to D1 with retry
     echo "Uploading chunks to D1 database '$D1_DATABASE'..."
     local upload_failed=false
+    local total_rows_written_for_file=0
 
     for file in "$CHUNKS_DIR"/*.sql; do
       if [ ! -f "$file" ]; then
@@ -231,7 +201,8 @@ process_sqlite_file() {
       
       echo "Uploading '$file'..."
       retries=$MAX_RETRIES
-      until npx wrangler d1 execute "$D1_DATABASE" --remote --file="$file" -y
+      upload_output=""
+      until upload_output=$(npx wrangler d1 execute "$D1_DATABASE" --remote --file="$file" -y --json)
       do
         retries=$((retries-1))
         if [ $retries -eq 0 ]; then
@@ -247,7 +218,15 @@ process_sqlite_file() {
         break
       fi
       
-      echo "Successfully uploaded '$file'."
+      json_output=$(echo "$upload_output" | sed -n '/^\[/,$p')
+      if [ -n "$json_output" ]; then
+        rows_written=$(echo "$json_output" | jq '.[0].meta.rows_written // 0')
+      else
+        rows_written=0
+      fi
+      total_rows_written_for_file=$((total_rows_written_for_file + rows_written))
+      
+      echo "Successfully uploaded '$file'. Rows written: $rows_written"
     done
 
     if [ "$upload_failed" = "true" ]; then
@@ -260,11 +239,11 @@ process_sqlite_file() {
     # Update total entries in KV store
     local current_total
     current_total=$(get_kv_total_entries)
-    local new_total=$((current_total + entry_count))
+    local new_total=$((current_total + total_rows_written_for_file))
     update_kv_total_entries "$new_total"
     
     # Send Telegram notification
-    local message="Database upload completed: $filename ($entry_count entries processed, total: $new_total)"
+    local message="Database upload completed: $filename ($total_rows_written_for_file entries processed, total: $new_total)"
     send_telegram "$message"
     
     # Update KV store timestamp
@@ -290,6 +269,7 @@ process_sqlite_file() {
         echo "$cleanup_error_msg"
     fi
     
+    echo "$total_rows_written_for_file"
     return 0
 }
 
@@ -375,14 +355,13 @@ while true; do
                 echo ""
                 echo "=== Processing $(basename "$sqlite_file") ==="
                 
-                # Count entries before processing for summary
-                file_entries=$(count_sqlite_entries "$sqlite_file")
-                
-                if process_sqlite_file "$sqlite_file"; then
+                if process_output=$(process_sqlite_file "$sqlite_file"); then
+                    file_entries=$(echo "$process_output" | tail -n1)
                     echo "Successfully processed $(basename "$sqlite_file")"
                     processed_count=$((processed_count + 1))
                     total_entries=$((total_entries + file_entries))
                 else
+                    echo "$process_output"
                     echo "Failed to process $(basename "$sqlite_file")"
                     failed_count=$((failed_count + 1))
                     # Keep the file for manual inspection

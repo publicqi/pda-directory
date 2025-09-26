@@ -26,3 +26,4 @@ uploader/target
 .wrangler/
 downloaded_sqlite/
 .env
+d1_chunks/
