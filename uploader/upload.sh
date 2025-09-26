@@ -1,16 +1,28 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
-# This script continuously monitors for SQLite files on remote server,
+# This script continuously monitors for SQLite files on a remote server,
 # downloads them, splits them into chunks, uploads to Cloudflare D1,
 # and cleans up both local and remote files.
 
-# Exit immediately if a command exits with a non-zero status.
-set -e
+set -Eeuo pipefail
+shopt -s nullglob
 
-if ! command -v jq &> /dev/null; then
-    echo "Error: jq is not installed. Please install it to continue."
-    exit 1
-fi
+# --- Dependency Check ---
+check_deps() {
+    local missing_deps=()
+    for dep in "$@"; do
+        if ! command -v "$dep" &>/dev/null; then
+            missing_deps+=("$dep")
+        fi
+    done
+
+    if [ ${#missing_deps[@]} -gt 0 ]; then
+        echo "Error: Missing required dependencies: ${missing_deps[*]}" >&2
+        echo "Please install them to continue." >&2
+        exit 1
+    fi
+}
+check_deps jq sqlite3 rsync ssh curl npx wrangler split
 
 # Load environment variables if .env file exists
 if [ -f ".env" ]; then
@@ -36,7 +48,6 @@ MONITOR_INTERVAL=60  # 1 minute in seconds
 
 # Validate required environment variables for Telegram
 if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
-    echo "Warning: TELEGRAM_BOT_TOKEN and/or TELEGRAM_CHAT_ID not set. Telegram notifications disabled."
     exit 1
 fi
 
@@ -66,40 +77,56 @@ send_telegram() {
 # Function to delete remote file after successful processing
 delete_remote_file() {
     local filename="$1"
-    local remote_file_path="${REMOTE_PATH}${filename}"
     
     # Extract hostname and path for SSH-based connections
-    local ssh_host=$(echo "$REMOTE_PATH" | cut -d':' -f1)
-    local remote_dir=$(echo "$REMOTE_PATH" | cut -d':' -f2-)
-    local full_remote_path="${remote_dir}${filename}"
-    echo "ssh $ssh_host \"rm -f \"$full_remote_path\""
-    if ssh "$ssh_host" "rm -f \"$full_remote_path\"" 2>/dev/null; then
+    local ssh_host
+    ssh_host=$(echo "$REMOTE_PATH" | cut -d':' -f1)
+    local remote_dir
+    remote_dir=$(echo "$REMOTE_PATH" | cut -d':' -f2-)
+    
+    # Ensure remote_dir ends with a slash for safe concatenation
+    local full_remote_path="${remote_dir%/}/$filename"
+
+    if ssh "$ssh_host" "rm -f \"$full_remote_path\""; then
+        echo "Successfully deleted remote file: $filename"
         return 0
     else
-        send_telegram "Warning: Failed to delete remote file: $remote_file_path"
+        send_telegram "Warning: Failed to delete remote file: ${REMOTE_PATH}${filename}"
         return 1
     fi
 }
 
 get_total_entries() {
-    # npx wrangler d1 execute pda-directory --remote --command="SELECT n FROM _table_counts WHERE name = 'pda_registry';" --json | jq '.[0].results[0].n'
-    total_entries_output=$(npx wrangler d1 execute "$D1_DATABASE" --remote --command="SELECT n FROM _table_counts WHERE name = 'pda_registry';" --json)
+    local total_entries_output
+    if ! total_entries_output=$(npx wrangler d1 execute "$D1_DATABASE" --remote --command="SELECT n FROM _table_counts WHERE name = 'pda_registry';" --json); then
+        send_telegram "ERROR: Failed to query total entries from D1."
+        echo "0" # Return 0 on failure to avoid script crash
+        return 1
+    fi
+    local total_entries
     total_entries=$(echo "$total_entries_output" | jq '.[0].results[0].n')
-    return $total_entries
+    echo "$total_entries"
 }
 
 get_last_update_time() {
-    # npx wrangler d1 execute pda-directory --remote --command="SELECT last_insert_ts FROM _table_counts WHERE name = 'pda_registry';" --json | jq '.[0].results[0].last_insert_ts'
-    last_update_time_output=$(npx wrangler d1 execute "$D1_DATABASE" --remote --command="SELECT last_insert_ts FROM _table_counts WHERE name = 'pda_registry';" --json)
+    local last_update_time_output
+    if ! last_update_time_output=$(npx wrangler d1 execute "$D1_DATABASE" --remote --command="SELECT last_insert_ts FROM _table_counts WHERE name = 'pda_registry';" --json); then
+        send_telegram "ERROR: Failed to query last update time from D1."
+        echo "0" # Return 0 on failure
+        return 1
+    fi
+    local last_update_time
     last_update_time=$(echo "$last_update_time_output" | jq '.[0].results[0].last_insert_ts')
-    return $last_update_time
+    echo "$last_update_time"
 }
 
 # Function to process a single SQLite file
 process_sqlite_file() {
     local db_file="$1"
-    local filename=$(basename "$db_file")
-    local current_total=$(get_total_entries)
+    local filename
+    filename=$(basename "$db_file")
+    local current_total
+    current_total=$(get_total_entries)
     
     echo "Processing SQLite file: $filename"
     
@@ -132,7 +159,7 @@ process_sqlite_file() {
     # Add .sql suffix for macOS compatibility
     for f in "$CHUNKS_DIR"/chunk_*; do
       if [ -f "$f" ]; then
-        mv -- "$f" "$f.sql" || {
+        mv "$f" "$f.sql" || {
           send_telegram "ERROR: Failed to rename chunk file $f"
           return 1
         }
@@ -144,7 +171,6 @@ process_sqlite_file() {
     # Upload chunks to D1 with retry
     echo "Uploading chunks to D1 database '$D1_DATABASE'..."
     local upload_failed=false
-    local total_rows_written_for_file=0
 
     for file in "$CHUNKS_DIR"/*.sql; do
       if [ ! -f "$file" ]; then
@@ -170,15 +196,7 @@ process_sqlite_file() {
         break
       fi
       
-      json_output=$(echo "$upload_output" | sed -n '/^\[/,$p')
-      if [ -n "$json_output" ]; then
-        rows_written=$(echo "$json_output" | jq '.[0].meta.rows_written // 0')
-      else
-        rows_written=0
-      fi
-      total_rows_written_for_file=$((total_rows_written_for_file + rows_written))
-      
-      echo "Successfully uploaded '$file'. Rows written: $rows_written"
+      echo "Successfully uploaded '$file'"
     done
 
     if [ "$upload_failed" = "true" ]; then
@@ -186,8 +204,10 @@ process_sqlite_file() {
         return 1
     fi
 
-    local new_total =$(get_total_entries)
-    local difference =$((new_total - current_total))
+    local new_total
+    new_total=$(get_total_entries)
+    local difference
+    difference=$((new_total - current_total))
     # Send Telegram notification
     local message="Database upload completed: $filename ($difference entries processed, total: $new_total)"
     send_telegram "$message"
@@ -209,6 +229,7 @@ process_sqlite_file() {
         send_telegram "$cleanup_error_msg"
     fi
     
+    echo "$difference" # Return the number of new entries
     return 0
 }
 
@@ -226,7 +247,11 @@ last_update_time=$(get_last_update_time)
 
 echo "Current total entries in database: $current_total_entries"
 if [ -n "$last_update_time" ] && [ "$last_update_time" != "0" ]; then
-    last_update_formatted=$(date -r "$last_update_time" 2>/dev/null || echo "Invalid timestamp")
+    if [[ "$(uname)" == "Darwin" ]]; then # macOS
+        last_update_formatted=$(date -r "$last_update_time")
+    else # Linux
+        last_update_formatted=$(date -d "@$last_update_time")
+    fi
     echo "Last upload time: $last_update_formatted"
 else
     echo "Last upload time: Never"
@@ -254,52 +279,83 @@ while true; do
     echo "$(date): Checking for new SQLite files..."
     
     # Download SQLite files from remote using rsync
-    # NOT using --remove-source-files to ensure files are only deleted after successful D1 upload
-    # Using --include and --exclude to only sync .sqlite files
-    downloaded_files=""
-    if ! downloaded_files=$(rsync -av \
+    # We build a list of files to process.
+    rsync_output=""
+    rsync_exit_code=0
+    rsync_output=$(rsync -av \
+        --include="*/" \
         --include="*.sqlite" \
         --exclude="*.shard*.sqlite" \
         --exclude="*" \
-        "$REMOTE_PATH" "$LOCAL_DOWNLOAD_DIR/" 2>/dev/null | grep -E "\.sqlite$" || true); then
-        echo "Warning: rsync command failed. Will retry in next cycle."
+        "$REMOTE_PATH" "$LOCAL_DOWNLOAD_DIR/" 2>&1) || rsync_exit_code=$?
+
+    if [ $rsync_exit_code -ne 0 ]; then
+        echo "Warning: rsync command failed with exit code $rsync_exit_code. Will retry in next cycle."
+        send_telegram "Warning: rsync failed with exit code $rsync_exit_code. Output: $rsync_output"
         sleep $MONITOR_INTERVAL
         continue
     fi
     
-    if [ -z "$downloaded_files" ]; then
+    # Extract file paths from rsync output.
+    # We use `awk` to get just the path, which is more reliable than parsing the whole line.
+    # Using a while-read loop for compatibility with older bash versions (like on macOS).
+    downloaded_files=()
+    while IFS= read -r line; do
+        downloaded_files+=("$line")
+    done < <(echo "$rsync_output" | grep -E -- 'deleting|\.sqlite$' | grep -v '/$' | awk 'NF>1 {print $2} NF==1 {print $1}')
+
+    if [ ${#downloaded_files[@]} -eq 0 ]; then
         echo "No new SQLite files found. Sleeping for $MONITOR_INTERVAL seconds..."
     else
-        send_telegram "Downloaded files: $downloaded_files"
+        send_telegram "Downloaded files: ${downloaded_files[*]}"
         processed_count=0
         failed_count=0
         total_entries=0
         
         # Process each downloaded SQLite file
-        for sqlite_file in "$LOCAL_DOWNLOAD_DIR"/*.sqlite; do
-            if [ -f "$sqlite_file" ]; then
-                echo ""
-                echo "=== Processing $(basename "$sqlite_file") ==="
-                
-                if process_output=$(process_sqlite_file "$sqlite_file"); then
-                    file_entries=$(echo "$process_output" | tail -n1)
-                    echo "Successfully processed $(basename "$sqlite_file")"
-                    processed_count=$((processed_count + 1))
-                    total_entries=$((total_entries + file_entries))
-                else
-                    echo "$process_output"
-                    echo "Failed to process $(basename "$sqlite_file")"
-                    failed_count=$((failed_count + 1))
-                    # Keep the file for manual inspection
-                    send_telegram "File kept at: $sqlite_file"
-                    
-                    # Send error notification
-                    error_msg="ERROR: Failed to process $(basename "$sqlite_file")"
-                    send_telegram "$error_msg"
-                fi
-                echo "=== Finished processing $(basename "$sqlite_file") ==="
-                echo ""
+        for downloaded_file_rel_path in "${downloaded_files[@]}"; do
+            sqlite_file="$LOCAL_DOWNLOAD_DIR/$downloaded_file_rel_path"
+
+            if [ ! -f "$sqlite_file" ]; then
+                echo "Warning: Expected file '$sqlite_file' not found. It might have been a directory or was removed. Skipping."
+                continue
             fi
+
+            # --- File Stability Check ---
+            # Ensure the file is not currently being written to by checking if its size is stable.
+            echo "Checking stability of '$sqlite_file'..."
+            size1=$(stat -c%s "$sqlite_file" 2>/dev/null || stat -f%z "$sqlite_file")
+            sleep 2 # Wait for potential writes to finish
+            size2=$(stat -c%s "$sqlite_file" 2>/dev/null || stat -f%z "$sqlite_file")
+
+            if [ "$size1" -ne "$size2" ]; then
+                echo "File '$sqlite_file' is unstable (size changed from $size1 to $size2). Skipping for now."
+                send_telegram "Warning: File '$sqlite_file' is unstable. It will be re-checked in the next cycle."
+                continue
+            fi
+            echo "File is stable (size $size1). Proceeding with processing."
+            # --- End Stability Check ---
+            
+            echo ""
+            echo "=== Processing $(basename "$sqlite_file") ==="
+            
+            file_entries=0
+            if file_entries=$(process_sqlite_file "$sqlite_file"); then
+                echo "Successfully processed $(basename "$sqlite_file")"
+                processed_count=$((processed_count + 1))
+                total_entries=$((total_entries + file_entries))
+            else
+                echo "Failed to process $(basename "$sqlite_file")"
+                failed_count=$((failed_count + 1))
+                # Keep the file for manual inspection
+                send_telegram "File kept at: $sqlite_file"
+                
+                # Send error notification
+                error_msg="ERROR: Failed to process $(basename "$sqlite_file")"
+                send_telegram "$error_msg"
+            fi
+            echo "=== Finished processing $(basename "$sqlite_file") ==="
+            echo ""
         done
         
         # Send summary notification if any files were processed successfully
