@@ -34,5 +34,9 @@
             "pattern": "api.pda.directory",
             "custom_domain": true
         }
-    ]
+    ],
+    "vars": {
+        "API_BASE_URL": "https://api.pda.directory",
+        "BASE_URL": "https://pda.directory"
+    }
 }
