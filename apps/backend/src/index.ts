@@ -259,6 +259,24 @@ export const createApp = (): Hono<Env> => {
 
   app.get('/api/healthz', (c) => c.json({ status: 'ok' }));
 
+  /*
+  // NOTE: In uploader use wrangler to toggle the database
+
+  app.get('/api/toggle_database', async (c) => {
+    const kv = c.env.pda_kv;
+    const database = await kv.get('ACTIVE_DB');
+    if (!database) {
+      throw new HTTPException(500, { message: 'Active database not found' });
+    }
+    if (database === 'blue') {
+      await kv.put('ACTIVE_DB', 'green');
+    } else {
+      await kv.put('ACTIVE_DB', 'blue');
+    }
+    return c.json({ status: 'ok', database: database === 'blue' ? 'green' : 'blue' });
+  });
+  */
+
   app.get('/api/last_update_time', async (c) => {
     // SELECT last_insert_ts FROM _table_counts WHERE name = "pda_registry";
     const database = await getDatabase(c);
