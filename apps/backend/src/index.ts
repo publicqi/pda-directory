@@ -8,7 +8,7 @@ type Env = {
   Bindings: {
     pda_directory_blue: D1Database;
     pda_directory_green: D1Database;
-    PDA_DIRECTORY: KVNamespace;
+    PDA_DIRECTORY: KVNamespace,
     ASSETS: Fetcher;
     API_BASE_URL?: string;
     PDA_DIRECTORY_RATE_LIMITER: RateLimit;
@@ -252,26 +252,23 @@ async function getDatabase(c: Context<Env, any, any>): Promise<D1Database> {
     }
   }
 
-  // Cache expired or invalid, ead from KV
+  // Cache expired or invalid, read from KV
   const kv = c.env.PDA_DIRECTORY;
-  if (!kv)
-    throw new HTTPException(500, { message: 'KV binding PDA_DIRECTORY is not configured' });
-}
-const database = await kv.get('ACTIVE_DB');
-if (!database) {
-  throw new HTTPException(500, { message: 'Active database not found' });
-}
+  const database = await kv.get('ACTIVE_DB');
+  if (!database) {
+    throw new HTTPException(500, { message: 'Active database not found' });
+  }
 
-// Update cache
-dbCache = { value: database, timestamp: now };
+  // Update cache
+  dbCache = { value: database, timestamp: now };
 
-if (database === 'blue') {
-  return c.env.pda_directory_blue;
-}
-if (database === 'green') {
-  return c.env.pda_directory_green;
-}
-throw new HTTPException(500, { message: 'Invalid database' });
+  if (database === 'blue') {
+    return c.env.pda_directory_blue;
+  }
+  if (database === 'green') {
+    return c.env.pda_directory_green;
+  }
+  throw new HTTPException(500, { message: 'Invalid database' });
 }
 
 export const createApp = (): Hono<Env> => {
@@ -316,8 +313,8 @@ export const createApp = (): Hono<Env> => {
   /*
   // NOTE: In uploader use wrangler to toggle the database
 
-  app.get('/api/toggle_database',async (c) => {
-    const kv = c.env.PDA_DIRECTORY;
+  app.get('/api/toggle_database', async (c) => {
+    const kv = c.env.pda_kv;
     const database = await kv.get('ACTIVE_DB');
     if (!database) {
       throw new HTTPException(500, { message: 'Active database not found' });
