@@ -254,6 +254,9 @@ async function getDatabase(c: Context<Env, any, any>): Promise<D1Database> {
 
   // Cache expired or invalid, read from KV
   const kv = c.env.pda_kv;
+  if (!kv) {
+    throw new HTTPException(500, { message: 'KV binding pda_kv is not configured' });
+  }
   const database = await kv.get('ACTIVE_DB');
   if (!database) {
     throw new HTTPException(500, { message: 'Active database not found' });
