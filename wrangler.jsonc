@@ -9,12 +9,22 @@
     "upload_source_maps": false,
     "d1_databases": [
         {
-            "binding": "pda_directory",
-            "database_name": "pda-directory",
-            "database_id": "65dbe413-7fa7-49e4-af70-988458f76fe1"
+            "binding": "pda_directory_blue",
+            "database_name": "pda-directory-blue",
+            "database_id": "e0d3e70f-8b45-4906-865f-cc54ac1ae3bb"
+        },
+        {
+            "binding": "pda_directory_green",
+            "database_name": "pda-directory-green",
+            "database_id": "b174381a-dfee-4d35-a6e0-8a18a23c7092"
         }
     ],
-    "kv_namespaces": [],
+    "kv_namespaces": [
+        {
+            "binding": "PDA_DIRECTORY",
+            "id": "05dc24c1e32e433ba403340ffcb21fb2"
+        }
+    ],
     "observability": {
         "logs": {
             "enabled": true

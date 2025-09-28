@@ -1,12 +1,14 @@
 import type { D1Database, Fetcher, RateLimit } from '@cloudflare/workers-types';
 import { base58_to_binary, binary_to_base58 } from 'base58-js';
-import { Hono } from 'hono';
+import { Context, Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { HTTPException } from 'hono/http-exception';
 
 type Env = {
   Bindings: {
-    pda_directory: D1Database;
+    pda_directory_blue: D1Database;
+    pda_directory_green: D1Database;
+    pda_kv: KVNamespace,
     ASSETS: Fetcher;
     API_BASE_URL?: string;
     PDA_DIRECTORY_RATE_LIMITER: RateLimit;
@@ -210,6 +212,21 @@ function resolveOffset(rawOffset: string | undefined | null): number {
   return parsed;
 }
 
+async function getDatabase(c: Context<Env, any, {}>): Promise<D1Database> {
+  const kv = c.env.pda_kv;
+  const database = await kv.get('ACTIVE_DB');
+  if (!database) {
+    throw new HTTPException(500, { message: 'Active database not found' });
+  }
+  if (database === 'blue') {
+    return c.env.pda_directory_blue;
+  }
+  if (database === 'green') {
+    return c.env.pda_directory_green;
+  }
+  throw new HTTPException(500, { message: 'Invalid database' });
+}
+
 export const createApp = (): Hono<Env> => {
   const app = new Hono<Env>();
 
@@ -244,7 +261,7 @@ export const createApp = (): Hono<Env> => {
 
   app.get('/api/last_update_time', async (c) => {
     // SELECT last_insert_ts FROM _table_counts WHERE name = "pda_registry";
-    const database = c.env.pda_directory;
+    const database = await getDatabase(c);
     if (!database) {
       throw new HTTPException(500, { message: 'Database binding pda_directory is not configured' });
     }
@@ -259,7 +276,7 @@ export const createApp = (): Hono<Env> => {
 
   app.get('/api/total_entries', async (c) => {
     // SELECT n FROM _table_counts WHERE name = "pda_registry";
-    const database = c.env.pda_directory;
+    const database = await getDatabase(c);
     if (!database) {
       throw new HTTPException(500, { message: 'Database binding pda_directory is not configured' });
     }
@@ -308,7 +325,7 @@ export const createApp = (): Hono<Env> => {
       offset = resolveOffset(offsetFromBody?.toString());
     }
 
-    const database = c.env.pda_directory;
+    const database = await getDatabase(c);
     if (!database) {
       throw new HTTPException(500, { message: 'Database binding pda_directory is not configured' });
     }
