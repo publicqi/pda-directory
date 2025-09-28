@@ -95,19 +95,29 @@ const checkIfAddressIsExecutable = async (address: string): Promise<boolean | nu
 interface UseSignaturesFetchParams {
   query: string | null;
   offset: number;
+  cursor?: string | null;
   isSearchMode: boolean;
 }
 
-export function useSignaturesFetch({ query, offset, isSearchMode }: UseSignaturesFetchParams) {
+export function useSignaturesFetch({ query, offset, cursor, isSearchMode }: UseSignaturesFetchParams) {
   const [state, dispatch] = useReducer(fetchReducer, { status: 'idle' });
 
   const fetchPdas = useCallback(async (
     pdaOrProgramId: string | null,
     offset: number,
     searchType: 'pda' | 'program_id',
-    signal: AbortSignal
+    signal: AbortSignal,
+    useCursor?: string | null
   ): Promise<ApiResponse> => {
-    const body: { [key: string]: string | number } = { offset };
+    const body: { [key: string]: string | number } = {};
+
+    // Use cursor if provided, otherwise use offset
+    if (useCursor) {
+      body.cursor = useCursor;
+    } else {
+      body.offset = offset;
+    }
+
     if (pdaOrProgramId) {
       body[searchType] = pdaOrProgramId;
     }
@@ -132,18 +142,19 @@ export function useSignaturesFetch({ query, offset, isSearchMode }: UseSignature
   const searchWithAutoDetection = useCallback(async (
     address: string,
     offset: number,
-    signal: AbortSignal
+    signal: AbortSignal,
+    useCursor?: string | null
   ): Promise<ApiResponse> => {
     const isExecutable = await checkIfAddressIsExecutable(address);
 
     if (isExecutable === true) {
-      return await fetchPdas(address, offset, 'program_id', signal);
+      return await fetchPdas(address, offset, 'program_id', signal, useCursor);
     } else if (isExecutable === false) {
-      return await fetchPdas(address, offset, 'pda', signal);
+      return await fetchPdas(address, offset, 'pda', signal, useCursor);
     } else {
       // Try PDA first, then program_id
       try {
-        const pdaResults = await fetchPdas(address, offset, 'pda', signal);
+        const pdaResults = await fetchPdas(address, offset, 'pda', signal, useCursor);
         if (pdaResults.results.length > 0) {
           return pdaResults;
         }
@@ -151,7 +162,7 @@ export function useSignaturesFetch({ query, offset, isSearchMode }: UseSignature
         // Continue to program_id search
       }
 
-      return await fetchPdas(address, offset, 'program_id', signal);
+      return await fetchPdas(address, offset, 'program_id', signal, useCursor);
     }
   }, [fetchPdas]);
 
@@ -165,11 +176,11 @@ export function useSignaturesFetch({ query, offset, isSearchMode }: UseSignature
       try {
         if (isSearchMode && trimmedQuery) {
           dispatch({ type: 'START_SEARCH' });
-          const data = await searchWithAutoDetection(trimmedQuery, offset, signal);
+          const data = await searchWithAutoDetection(trimmedQuery, offset, signal, cursor);
           dispatch({ type: 'SUCCESS', payload: data });
         } else {
           dispatch({ type: 'START_EXPLORE' });
-          const data = await fetchPdas(null, offset, 'pda', signal);
+          const data = await fetchPdas(null, offset, 'pda', signal, cursor);
           dispatch({ type: 'SUCCESS', payload: data });
         }
       } catch (caught) {
@@ -186,7 +197,7 @@ export function useSignaturesFetch({ query, offset, isSearchMode }: UseSignature
     return () => {
       controller.abort();
     };
-  }, [query, offset, isSearchMode, searchWithAutoDetection, fetchPdas]);
+  }, [query, offset, cursor, isSearchMode, searchWithAutoDetection, fetchPdas]);
 
   return {
     state,

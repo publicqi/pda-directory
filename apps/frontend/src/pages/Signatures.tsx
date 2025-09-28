@@ -10,6 +10,7 @@ const SignaturesPage = () => {
   const [searchParams, setSearchParams] = useSearchParams();
   const queryFromUrl = searchParams.get('q') ?? '';
   const offsetFromUrl = parseInt(searchParams.get('offset') ?? '0', 10);
+  const cursorFromUrl = searchParams.get('cursor') ?? null;
   const searchInputRef = useRef<HTMLInputElement>(null);
 
   const [query, setQuery] = useState(queryFromUrl);
@@ -26,6 +27,7 @@ const SignaturesPage = () => {
   } = useSignaturesFetch({
     query: queryFromUrl,
     offset: offsetFromUrl,
+    cursor: cursorFromUrl,
     isSearchMode,
   });
 
@@ -63,7 +65,11 @@ const SignaturesPage = () => {
   const handlePreviousPage = () => {
     if (apiResponse?.has_previous) {
       const params = new URLSearchParams(searchParams);
-      params.set('offset', String(apiResponse.previous_offset));
+      // For previous page, always use offset-based pagination
+      if (apiResponse.previous_offset !== undefined) {
+        params.set('offset', String(apiResponse.previous_offset));
+        params.delete('cursor'); // Remove cursor when going back to offset
+      }
       setSearchParams(params);
     }
   };
@@ -71,14 +77,24 @@ const SignaturesPage = () => {
   const handleNextPage = () => {
     if (apiResponse?.has_next) {
       const params = new URLSearchParams(searchParams);
-      params.set('offset', String(apiResponse.next_offset));
+
+      // Prefer cursor pagination for better performance on deep pages
+      if (apiResponse.next_cursor) {
+        params.set('cursor', apiResponse.next_cursor);
+        params.delete('offset'); // Remove offset when using cursor
+      } else if (apiResponse.next_offset !== null && apiResponse.next_offset !== undefined) {
+        params.set('offset', String(apiResponse.next_offset));
+        params.delete('cursor');
+      }
       setSearchParams(params);
     }
   };
 
-  const currentPage = Math.floor(offsetFromUrl / 25) + 1;
-  const startRecord = offsetFromUrl + 1;
-  const endRecord = offsetFromUrl + (entries.length);
+  // Calculate page info based on whether we're using cursor or offset
+  const isUsingCursor = cursorFromUrl !== null;
+  const currentPage = isUsingCursor ? null : Math.floor(offsetFromUrl / 25) + 1;
+  const startRecord = isUsingCursor ? null : offsetFromUrl + 1;
+  const endRecord = isUsingCursor ? null : offsetFromUrl + (entries.length);
 
   return (
     <>
@@ -129,7 +145,10 @@ const SignaturesPage = () => {
                 </>
               ) : (
                 <span className="label">
-                  {`Page ${currentPage} • Showing ${startRecord}-${endRecord} records`}
+                  {isUsingCursor
+                    ? `Showing ${entries.length} records (cursor-based pagination)`
+                    : `Page ${currentPage} • Showing ${startRecord}-${endRecord} records`
+                  }
                 </span>
               )}
             </span>
@@ -177,7 +196,7 @@ const SignaturesPage = () => {
               isLoading={isExploring}
               onPreviousPage={handlePreviousPage}
               onNextPage={handleNextPage}
-              currentPage={currentPage}
+              currentPage={currentPage ?? undefined}
               variant="footer"
             />
           </div>

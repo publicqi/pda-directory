@@ -20,6 +20,10 @@ type Settings = {
   maxLimit: number;
 };
 
+// Global database cache to avoid repeated KV reads
+let dbCache: { value: string; timestamp: number } | null = null;
+const DB_CACHE_TTL = 30000; // 30 second TTL
+
 type PdaRecord = {
   pda: Uint8Array;
   programId: Uint8Array;
@@ -31,6 +35,7 @@ type ListParams = {
   programIdBytes: Uint8Array | null;
   limit: number;
   offset: number;
+  cursor?: Uint8Array | null;
 };
 
 // D1 returns BLOBs as Array<number> on reads. Convert directly.
@@ -119,7 +124,8 @@ function decodeSeedBlob(view: Uint8Array): Uint8Array[] {
 
     if (offset + length > totalLength) throw new Error('Seed blob truncated during payload read');
 
-    seeds.push(view.slice(offset, offset + length));
+    // Zero-copy view
+    seeds.push(view.subarray(offset, offset + length));
     offset += length;
   }
 
@@ -135,31 +141,50 @@ function toHex(value: Uint8Array): string {
 
 
 function sliceBuffer(bytes: Uint8Array): ArrayBuffer {
-  const clone = new Uint8Array(bytes.byteLength);
-  clone.set(bytes);
-  return clone.buffer;
+  if (bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength && bytes.buffer instanceof ArrayBuffer) {
+    return bytes.buffer; // Zero-copy
+  }
+  return bytes.slice().buffer; // Copy only the needed window
 }
 
 async function fetchPdas(
   db: D1Database,
-  { pdaBytes, programIdBytes, limit, offset }: ListParams,
+  { pdaBytes, programIdBytes, limit, offset, cursor }: ListParams,
 ): Promise<PdaRecord[]> {
   let sql = 'SELECT pda, program_id, seed_bytes FROM pda_registry ';
   const params: unknown[] = [];
 
   if (pdaBytes) {
-    sql += 'WHERE pda = ? ';
+    // Single PDA lookup: primary key equality search, no need for ORDER BY/LIMIT
+    sql += 'WHERE pda = ?';
     const buffer = sliceBuffer(pdaBytes);
     params.push(buffer);
   } else if (programIdBytes) {
-    const hexByte = programIdBytes[0].toString(16).padStart(2, '0').toUpperCase();
-    sql += `WHERE program_id = ? AND substr(program_id, 1, 1) = X'${hexByte}' `;
-    const buffer = sliceBuffer(programIdBytes);
-    params.push(buffer);
+    // Remove redundant substr condition, keep only parameterized program_id query
+    if (cursor) {
+      // Keyset pagination: use cursor instead of OFFSET
+      sql += 'WHERE program_id = ? AND pda > ? ORDER BY pda LIMIT ?';
+      const programBuffer = sliceBuffer(programIdBytes);
+      const cursorBuffer = sliceBuffer(cursor);
+      params.push(programBuffer, cursorBuffer, limit);
+    } else {
+      // Traditional OFFSET pagination
+      sql += 'WHERE program_id = ? ORDER BY pda LIMIT ? OFFSET ?';
+      const buffer = sliceBuffer(programIdBytes);
+      params.push(buffer, limit, offset);
+    }
+  } else {
+    if (cursor) {
+      // Full table keyset pagination
+      sql += 'WHERE pda > ? ORDER BY pda LIMIT ?';
+      const cursorBuffer = sliceBuffer(cursor);
+      params.push(cursorBuffer, limit);
+    } else {
+      // Full table OFFSET pagination
+      sql += 'ORDER BY pda LIMIT ? OFFSET ?';
+      params.push(limit, offset);
+    }
   }
-
-  sql += 'ORDER BY pda LIMIT ? OFFSET ?';
-  params.push(limit, offset);
 
   const statement = db.prepare(sql).bind(...params);
   type Row = {
@@ -212,12 +237,31 @@ function resolveOffset(rawOffset: string | undefined | null): number {
   return parsed;
 }
 
-async function getDatabase(c: Context<Env, any, {}>): Promise<D1Database> {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function getDatabase(c: Context<Env, any, any>): Promise<D1Database> {
+  const now = Date.now();
+
+  // Check if cache is valid
+  if (dbCache && (now - dbCache.timestamp) < DB_CACHE_TTL) {
+    const database = dbCache.value;
+    if (database === 'blue') {
+      return c.env.pda_directory_blue;
+    }
+    if (database === 'green') {
+      return c.env.pda_directory_green;
+    }
+  }
+
+  // Cache expired or invalid, read from KV
   const kv = c.env.pda_kv;
   const database = await kv.get('ACTIVE_DB');
   if (!database) {
     throw new HTTPException(500, { message: 'Active database not found' });
   }
+
+  // Update cache
+  dbCache = { value: database, timestamp: now };
+
   if (database === 'blue') {
     return c.env.pda_directory_blue;
   }
@@ -234,11 +278,18 @@ export const createApp = (): Hono<Env> => {
     if (err instanceof HTTPException) {
       const status = 'status' in err ? err.status : 500;
       const message = err.message || 'Request failed';
+
+      // For 500 errors, log detailed error but return friendly message
+      if (status >= 500) {
+        console.error('Internal server error:', err);
+        return c.json({ error: 'Internal server error' }, status);
+      }
+
       return c.json({ error: message }, status);
     }
 
     console.error('Unhandled error in PDA Directory API', err);
-    return c.json({ error: 'Internal Server Error' }, 500);
+    return c.json({ error: 'Internal server error' }, 500);
   });
 
   app.use('/api/*', cors({ origin: '*', allowMethods: ['GET', 'POST'], allowHeaders: ['Content-Type'] }));
@@ -319,7 +370,7 @@ export const createApp = (): Hono<Env> => {
     }
 
     const body = await c.req.json().catch(() => ({}));
-    const { pda, program_id, limit: limitFromBody, offset: offsetFromBody } = body;
+    const { pda, program_id, limit: limitFromBody, offset: offsetFromBody, cursor: cursorFromBody } = body;
 
     if (pda && typeof pda !== 'string') {
       throw new HTTPException(400, { message: 'pda must be a string' });
@@ -327,9 +378,13 @@ export const createApp = (): Hono<Env> => {
     if (program_id && typeof program_id !== 'string') {
       throw new HTTPException(400, { message: 'program_id must be a string' });
     }
+    if (cursorFromBody && typeof cursorFromBody !== 'string') {
+      throw new HTTPException(400, { message: 'cursor must be a string' });
+    }
 
     const pdaBytes = pda ? parseQuery(pda) : null;
     const programIdBytes = program_id ? parseQuery(program_id) : null;
+    const cursorBytes = cursorFromBody ? parseQuery(cursorFromBody) : null;
 
     let limit: number;
     let offset: number;
@@ -349,11 +404,25 @@ export const createApp = (): Hono<Env> => {
     }
 
     let rows: PdaRecord[];
+    let fetchLimit = limit;
+    let hasNext = false;
+
+    // For list queries (non-single PDA), use LIMIT+1 to accurately determine if there's a next page
+    if (!pdaBytes) {
+      fetchLimit = limit + 1;
+    }
+
     try {
-      rows = await fetchPdas(database, { pdaBytes, programIdBytes, limit, offset });
+      rows = await fetchPdas(database, { pdaBytes, programIdBytes, limit: fetchLimit, offset, cursor: cursorBytes });
+
+      // Check if there's a next page and truncate results
+      if (!pdaBytes && rows.length > limit) {
+        hasNext = true;
+        rows = rows.slice(0, limit);
+      }
     } catch (error) {
       console.error('Failed to fetch PDAs', error);
-      throw new HTTPException(500, { message: 'Failed to read from PDA directory. Maybe database is uploading... Try again later.' });
+      throw new HTTPException(500, { message: 'Internal server error' });
     }
 
     const entries = rows.map((row) => {
@@ -375,7 +444,6 @@ export const createApp = (): Hono<Env> => {
 
     const responsePayload: { [key: string]: unknown } = {
       limit,
-      offset,
       count: entries.length,
       results: entries,
     };
@@ -387,10 +455,22 @@ export const createApp = (): Hono<Env> => {
     }
 
     if (!pdaBytes) {
-      responsePayload.has_next = entries.length === limit;
+      // Pagination information
+      responsePayload.has_next = hasNext;
       responsePayload.has_previous = offset > 0;
-      responsePayload.next_offset = offset + limit;
-      responsePayload.previous_offset = Math.max(0, offset - limit);
+
+      if (cursorBytes) {
+        // Keyset pagination: provide next_cursor
+        if (hasNext && entries.length > 0) {
+          const lastEntry = entries[entries.length - 1];
+          responsePayload.next_cursor = lastEntry.pda;
+        }
+      } else {
+        // Traditional OFFSET pagination
+        responsePayload.offset = offset;
+        responsePayload.next_offset = hasNext ? offset + limit : null;
+        responsePayload.previous_offset = Math.max(0, offset - limit);
+      }
     }
 
     return c.json(responsePayload);

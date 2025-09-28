@@ -18,11 +18,12 @@ export interface ApiResponse {
     program_id?: string;
   };
   limit: number;
-  offset: number;
+  offset?: number; // Optional for cursor-based pagination
   count: number;
   results: PdaEntry[];
   has_next?: boolean;
   has_previous?: boolean;
-  next_offset?: number;
+  next_offset?: number | null;
   previous_offset?: number;
+  next_cursor?: string; // New: for cursor-based pagination
 }
