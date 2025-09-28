@@ -8,7 +8,7 @@ type Env = {
   Bindings: {
     pda_directory_blue: D1Database;
     pda_directory_green: D1Database;
-    PDA_DIRECTORY: KVNamespace,
+    PDA_DIRECTORY: KVNamespace;
     ASSETS: Fetcher;
     API_BASE_URL?: string;
     PDA_DIRECTORY_RATE_LIMITER: RateLimit;
