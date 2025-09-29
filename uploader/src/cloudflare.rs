@@ -311,11 +311,23 @@ fn build_insert_script(entries: &[PdaSqlite]) -> Result<Option<String>> {
             "INSERT OR IGNORE INTO pda_registry (pda, program_id, seed_count, seed_bytes) VALUES\n",
         );
 
+        fn encode_seeds_for_storage(seeds: &[Vec<u8>]) -> Vec<u8> {
+            let total_seed_bytes = seeds.iter().map(|seed| seed.len()).sum::<usize>();
+            let mut encoded = Vec::with_capacity(
+                total_seed_bytes + (seeds.len() + 1) * std::mem::size_of::<u32>(),
+            );
+            encoded.extend_from_slice(&(seeds.len() as u32).to_le_bytes());
+            for seed in seeds {
+                encoded.extend_from_slice(&(seed.len() as u32).to_le_bytes());
+                encoded.extend_from_slice(seed);
+            }
+            encoded
+        }
+
         for (index, entry) in chunk.iter().enumerate() {
             let pda_blob = to_blob_literal(entry.pda.as_ref());
             let program_blob = to_blob_literal(entry.program_id.as_ref());
-            let seed_bytes =
-                bincode::serialize(&entry.seeds).wrap_err("failed to serialize seeds")?;
+            let seed_bytes = encode_seeds_for_storage(&entry.seeds);
             let seed_blob = to_blob_literal(&seed_bytes);
 
             script.push_str(&format!(
