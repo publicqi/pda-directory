@@ -16,6 +16,8 @@ CREATE TABLE _table_counts (
     last_insert_ts INTEGER NOT NULL
 ) WITHOUT ROWID;
 
+INSERT OR IGNORE INTO _table_counts (name, n, last_insert_ts) VALUES ('pda_registry', 0, 0);
+
 CREATE TRIGGER pda_registry_ai AFTER INSERT ON pda_registry
 BEGIN
   UPDATE _table_counts
