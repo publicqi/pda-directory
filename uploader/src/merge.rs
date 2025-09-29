@@ -220,12 +220,71 @@ fn from_sqlite(path: &Path) -> Result<Vec<PdaSqlite>> {
         let program_id_bytes: Vec<u8> = row.get(1)?;
         let seed_bytes: Vec<u8> = row.get(2)?;
 
-        let seeds: Vec<Vec<u8>> = bincode::deserialize(&seed_bytes).map_err(|err| {
+        let seeds_raw: Vec<u8> = bincode::deserialize(&seed_bytes).map_err(|err| {
             eyre!(
                 "failed to deserialize seeds blob in {}: {err}",
                 path.display()
             )
         })?;
+
+        #[allow(unused)]
+        fn encode_seeds_for_storage(seeds: &[Vec<u8>]) -> Vec<u8> {
+            let total_seed_bytes = seeds.iter().map(|seed| seed.len()).sum::<usize>();
+            let mut encoded = Vec::with_capacity(
+                total_seed_bytes + (seeds.len() + 1) * std::mem::size_of::<u32>(),
+            );
+            encoded.extend_from_slice(&(seeds.len() as u32).to_le_bytes());
+            for seed in seeds {
+                encoded.extend_from_slice(&(seed.len() as u32).to_le_bytes());
+                encoded.extend_from_slice(seed);
+            }
+            encoded
+        }
+
+        fn decode_seeds_from_storage(seeds_raw: Vec<u8>) -> Vec<Vec<u8>> {
+            let mut cursor = 0;
+            let mut seeds = Vec::new();
+
+            // Read the number of seeds
+            if seeds_raw.len() < 4 {
+                return seeds; // Empty or invalid data
+            }
+
+            let num_seeds = u32::from_le_bytes([
+                seeds_raw[cursor],
+                seeds_raw[cursor + 1],
+                seeds_raw[cursor + 2],
+                seeds_raw[cursor + 3],
+            ]) as usize;
+            cursor += 4;
+
+            // Read each seed
+            for _ in 0..num_seeds {
+                if cursor + 4 > seeds_raw.len() {
+                    break; // Not enough data for seed length
+                }
+
+                let seed_len = u32::from_le_bytes([
+                    seeds_raw[cursor],
+                    seeds_raw[cursor + 1],
+                    seeds_raw[cursor + 2],
+                    seeds_raw[cursor + 3],
+                ]) as usize;
+                cursor += 4;
+
+                if cursor + seed_len > seeds_raw.len() {
+                    break; // Not enough data for seed content
+                }
+
+                let seed = seeds_raw[cursor..cursor + seed_len].to_vec();
+                seeds.push(seed);
+                cursor += seed_len;
+            }
+
+            seeds
+        }
+
+        let seeds = decode_seeds_from_storage(seeds_raw);
 
         entries.push(PdaSqlite {
             pda: decode_address(pda_bytes, "pda", path)?,
