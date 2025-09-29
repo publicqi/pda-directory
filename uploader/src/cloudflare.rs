@@ -303,9 +303,9 @@ fn to_blob_literal(bytes: &[u8]) -> String {
     literal.push_str("X'");
     for byte in bytes {
         use std::fmt::Write as _;
-        write!(&mut literal, "{:02X}", byte).expect("writing to string cannot fail");
+        write!(&mut literal, "{byte:02X}").expect("writing to string cannot fail");
     }
-    literal.push_str("'");
+    literal.push('\'');
     literal
 }
 
@@ -345,7 +345,7 @@ where
         }
 
         if let Some(payload) = self.result.as_ref() {
-            message = format!("{message}; payload: {:?}", payload);
+            message = format!("{message}; payload: {payload:?}");
         }
 
         message

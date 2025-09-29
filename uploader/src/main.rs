@@ -1,6 +1,6 @@
 use ::cloudflare::framework::auth::Credentials;
 use clap::Parser;
-use log::{info, warn};
+use log::info;
 
 use crate::{
     cloudflare::{get_kv, new_client, put_kv, upload_to_d1},
@@ -75,12 +75,12 @@ async fn main() {
         info!("Skipping D1 uploads because --blue-db-id and --green-db-id were not provided");
     }
 
-    // update telegram bot
+    // todo: update telegram bot
 
     // remove old files
-    for file in files {
-        if let Err(err) = std::fs::remove_file(&file) {
-            warn!("Failed to remove source blob {}: {err}", file.display());
-        }
-    }
+    // for file in files {
+    //     if let Err(err) = std::fs::remove_file(&file) {
+    //         warn!("Failed to remove source blob {}: {err}", file.display());
+    //     }
+    // }
 }
