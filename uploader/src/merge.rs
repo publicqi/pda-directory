@@ -18,10 +18,13 @@ use solana_address::Address;
 
 use crate::types::PdaSqlite;
 
-pub fn merge(path: PathBuf, dedup_hashset_path: PathBuf) -> Result<(Vec<PdaSqlite>, Vec<PathBuf>)> {
+pub fn merge(
+    path: PathBuf,
+    dedup_hashset_path: PathBuf,
+) -> Result<(Vec<PdaSqlite>, Vec<PathBuf>, HashSet<Address>)> {
     info!("Starting merge operation for path: {}", path.display());
 
-    let mut dedup_hashset: HashSet<Address> = if dedup_hashset_path.exists() {
+    let dedup_hashset: HashSet<Address> = if dedup_hashset_path.exists() {
         info!(
             "Loading existing dedup hashset from {}",
             dedup_hashset_path.display()
@@ -97,15 +100,21 @@ pub fn merge(path: PathBuf, dedup_hashset_path: PathBuf) -> Result<(Vec<PdaSqlit
         "Deduplication stats: {vec_deduped} deduped from vec, {hashset_deduped} deduped from hashset, {after_hashset_dedup} new entries"
     );
 
-    info!("Extending dedup hashset with {} new entries", entries.len());
-    dedup_hashset.extend(entries.iter().map(|entry| entry.pda));
     info!(
-        "Dedup hashset now contains {} total entries",
-        dedup_hashset.len()
+        "Merge operation completed: returning {} new entries, {} blob files, and original dedup hashset (entries will be added after successful uploads)",
+        entries.len(),
+        blob_files.len()
     );
+    Ok((entries, blob_files, dedup_hashset))
+}
 
+pub fn save_dedup_hashset(
+    dedup_hashset: &HashSet<Address>,
+    dedup_hashset_path: &Path,
+) -> Result<()> {
     info!(
-        "Serializing dedup hashset to {}",
+        "Serializing dedup hashset with {} entries to {}",
+        dedup_hashset.len(),
         dedup_hashset_path.display()
     );
     let temp_path = dedup_hashset_path.with_extension("tmp");
@@ -114,14 +123,14 @@ pub fn merge(path: PathBuf, dedup_hashset_path: PathBuf) -> Result<(Vec<PdaSqlit
     writer.flush()?;
     writer.get_mut().sync_all()?;
 
-    match std::fs::rename(&temp_path, &dedup_hashset_path) {
+    match std::fs::rename(&temp_path, dedup_hashset_path) {
         Ok(()) => {
             info!("Successfully saved dedup hashset");
         }
         Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
             info!("Dedup hashset already exists, replacing it");
-            std::fs::remove_file(&dedup_hashset_path)?;
-            std::fs::rename(&temp_path, &dedup_hashset_path)?;
+            std::fs::remove_file(dedup_hashset_path)?;
+            std::fs::rename(&temp_path, dedup_hashset_path)?;
             info!("Successfully replaced dedup hashset");
         }
         Err(err) => {
@@ -132,13 +141,7 @@ pub fn merge(path: PathBuf, dedup_hashset_path: PathBuf) -> Result<(Vec<PdaSqlit
             ));
         }
     }
-
-    info!(
-        "Merge operation completed: returning {} entries and {} blob files",
-        entries.len(),
-        blob_files.len()
-    );
-    Ok((entries, blob_files))
+    Ok(())
 }
 
 fn process_paths(

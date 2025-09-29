@@ -37,7 +37,8 @@ async fn main() {
     info!("Current production db: {active_db}");
 
     // merge
-    let (entries, files) = merge::merge(args.path, args.dedup_hashset_file).unwrap();
+    let (entries, files, mut dedup_hashset) =
+        merge::merge(args.path.clone(), args.dedup_hashset_file.clone()).unwrap();
     info!(
         "Merged {} files into {} new entries",
         files.len(),
@@ -53,11 +54,33 @@ async fn main() {
             other => panic!("unexpected active db: {other}"),
         };
 
-        upload_to_d1(&api_token, &args.account_id, inactive_db_id, &entries)
-            .await
-            .expect("failed to upload to inactive D1 database");
+        const CHUNK_SIZE: usize = 1000;
+        let total_entries = entries.len();
+        let num_chunks = total_entries.div_ceil(CHUNK_SIZE);
 
-        // toggle database
+        // Step 1: Upload to inactive database in chunks
+        info!(
+            "Step 1: Uploading {total_entries} entries to inactive database {inactive_db_id} in {num_chunks} chunk(s) of up to {CHUNK_SIZE} entries"
+        );
+
+        for (chunk_idx, chunk) in entries.chunks(CHUNK_SIZE).enumerate() {
+            let chunk_num = chunk_idx + 1;
+            info!(
+                "Uploading chunk {}/{} to inactive database: {} entries",
+                chunk_num,
+                num_chunks,
+                chunk.len()
+            );
+
+            upload_to_d1(&api_token, &args.account_id, inactive_db_id, chunk)
+                .await
+                .expect("failed to upload chunk to inactive D1 database");
+
+            info!("Successfully uploaded chunk {chunk_num}/{num_chunks} to inactive database");
+        }
+
+        // Step 2: Toggle the active database
+        info!("Step 2: Toggling active database to {new_active_label}");
         put_kv(
             client.clone(),
             &args.account_id,
@@ -67,12 +90,46 @@ async fn main() {
         )
         .await
         .expect("failed to put kv");
+        info!("Database toggle complete");
 
-        upload_to_d1(&api_token, &args.account_id, secondary_db_id, &entries)
-            .await
-            .expect("failed to upload to active D1 database");
+        // Step 3: Upload to secondary database in chunks
+        info!(
+            "Step 3: Uploading {total_entries} entries to secondary database {secondary_db_id} in {num_chunks} chunk(s)"
+        );
+
+        for (chunk_idx, chunk) in entries.chunks(CHUNK_SIZE).enumerate() {
+            let chunk_num = chunk_idx + 1;
+            info!(
+                "Uploading chunk {}/{} to secondary database: {} entries",
+                chunk_num,
+                num_chunks,
+                chunk.len()
+            );
+
+            upload_to_d1(&api_token, &args.account_id, secondary_db_id, chunk)
+                .await
+                .expect("failed to upload chunk to secondary D1 database");
+
+            info!("Successfully uploaded chunk {chunk_num}/{num_chunks} to secondary database");
+        }
+
+        // Step 4: Update and save dedup hashset to disk only after all uploads succeed
+        info!("Step 4: Updating and saving dedup hashset to disk");
+        dedup_hashset.extend(entries.iter().map(|entry| entry.pda));
+        info!(
+            "Extended dedup hashset with {} new entries (now contains {} total)",
+            entries.len(),
+            dedup_hashset.len()
+        );
+        merge::save_dedup_hashset(&dedup_hashset, &args.dedup_hashset_file)
+            .expect("failed to save dedup hashset");
+
+        info!("All operations completed successfully!");
     } else {
         info!("Skipping D1 uploads because --blue-db-id and --green-db-id were not provided");
+        // Still save the hashset even when skipping uploads (for testing)
+        merge::save_dedup_hashset(&dedup_hashset, &args.dedup_hashset_file)
+            .expect("failed to save dedup hashset");
     }
 
     // todo: update telegram bot
