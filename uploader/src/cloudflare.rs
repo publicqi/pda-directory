@@ -108,7 +108,7 @@ pub async fn upload_to_d1(
         "https://api.cloudflare.com/client/v4/accounts/{account_identifier}/d1/database/{database_identifier}/import"
     );
 
-    let init_response: CloudflareResponse<InitUploadResult> = http
+    let init_response: CloudflareResponse<InitResult> = http
         .post(&import_url)
         .header(CONTENT_TYPE, "application/json")
         .header(AUTHORIZATION, format!("Bearer {api_token}"))
@@ -121,135 +121,181 @@ pub async fn upload_to_d1(
         .wrap_err("failed to send D1 init request")?
         .error_for_status()
         .wrap_err("D1 init request returned error status")?
-        .json::<CloudflareResponse<InitUploadResult>>()
+        .json::<CloudflareResponse<InitResult>>()
         .await
         .wrap_err("failed to deserialize D1 init response")?;
 
     init_response.ensure_success()?;
 
-    let init_result: InitUploadResult = unpack_response(init_response)?;
+    let init_result = unpack_response(init_response)?;
 
-    debug!(
-        "Received upload URL {} and filename {}",
-        init_result.upload_url, init_result.filename
-    );
+    let import_status = match init_result {
+        InitResult::Upload(init_result) => {
+            debug!(
+                "Received upload URL {} and filename {}",
+                init_result.upload_url, init_result.filename
+            );
 
-    let upload_response = http
-        .put(&init_result.upload_url)
-        .body(sql_payload)
-        .send()
-        .await
-        .wrap_err("failed to upload SQL payload to R2")?
-        .error_for_status()
-        .wrap_err("D1 upload to R2 returned error status")?;
+            let upload_response = http
+                .put(&init_result.upload_url)
+                .body(sql_payload)
+                .send()
+                .await
+                .wrap_err("failed to upload SQL payload to R2")?
+                .error_for_status()
+                .wrap_err("D1 upload to R2 returned error status")?;
 
-    let response_etag = upload_response
-        .headers()
-        .get("ETag")
-        .and_then(|value| value.to_str().ok())
-        .map(|etag| etag.trim_matches('"').to_owned())
-        .ok_or_else(|| eyre!("missing ETag header in R2 upload response"))?;
+            let response_etag = upload_response
+                .headers()
+                .get("ETag")
+                .and_then(|value| value.to_str().ok())
+                .map(|etag| etag.trim_matches('"').to_owned())
+                .ok_or_else(|| eyre!("missing ETag header in R2 upload response"))?;
 
-    if response_etag != checksum {
-        return Err(eyre!(
-            "ETag mismatch: expected {checksum}, got {response_etag}"
-        ));
-    }
-
-    debug!("Verified upload etag {response_etag}");
-
-    let ingest_response: CloudflareResponse<IngestResult> = http
-        .post(&import_url)
-        .header(CONTENT_TYPE, "application/json")
-        .header(AUTHORIZATION, format!("Bearer {api_token}"))
-        .json(&json!({
-            "action": "ingest",
-            "etag": checksum,
-            "filename": init_result.filename,
-        }))
-        .send()
-        .await
-        .wrap_err("failed to send D1 ingest request")?
-        .error_for_status()
-        .wrap_err("D1 ingest request returned error status")?
-        .json::<CloudflareResponse<IngestResult>>()
-        .await
-        .wrap_err("failed to deserialize D1 ingest response")?;
-
-    ingest_response.ensure_success()?;
-
-    let ingest_result: IngestResult = unpack_response(ingest_response)?;
-
-    let mut bookmark = ingest_result.at_bookmark;
-    let mut attempts = 0usize;
-    const MAX_ATTEMPTS: usize = 300;
-
-    loop {
-        attempts += 1;
-        let current_bookmark = bookmark.clone();
-        let poll_response: CloudflareResponse<PollResult> = http
-            .post(&import_url)
-            .header(CONTENT_TYPE, "application/json")
-            .header(AUTHORIZATION, format!("Bearer {api_token}"))
-            .json(&json!({
-                "action": "poll",
-                "current_bookmark": current_bookmark,
-            }))
-            .send()
-            .await
-            .wrap_err("failed to send D1 poll request")?
-            .error_for_status()
-            .wrap_err("D1 poll request returned error status")?
-            .json::<CloudflareResponse<PollResult>>()
-            .await
-            .wrap_err("failed to deserialize D1 poll response")?;
-
-        poll_response.ensure_success()?;
-
-        let poll_result: PollResult = unpack_response(poll_response)?;
-
-        debug!(
-            "Poll attempt {attempts}: success={}, error={:?}, status={:?}",
-            poll_result.success, poll_result.error, poll_result.status
-        );
-
-        if poll_result.success {
-            info!("D1 import completed for database {database_identifier}");
-            break;
-        }
-
-        if let Some(err) = poll_result.error.as_deref() {
-            if err == "Not currently importing anything." {
-                info!("D1 import already complete for database {database_identifier}");
-                break;
-            }
-
-            return Err(eyre!("D1 import failed: {err}"));
-        }
-
-        if let Some(status) = poll_result.status.as_deref() {
-            let status_lower = status.to_ascii_lowercase();
-            if status_lower.contains("fail") || status_lower.contains("error") {
+            if response_etag != checksum {
                 return Err(eyre!(
-                    "D1 import reported failure status '{status}' for database {database_identifier}"
+                    "ETag mismatch: expected {checksum}, got {response_etag}"
                 ));
             }
+
+            debug!("Verified upload etag {response_etag}");
+
+            let ingest_response: CloudflareResponse<ImportStatus> = http
+                .post(&import_url)
+                .header(CONTENT_TYPE, "application/json")
+                .header(AUTHORIZATION, format!("Bearer {api_token}"))
+                .json(&json!({
+                    "action": "ingest",
+                    "etag": checksum,
+                    "filename": init_result.filename,
+                }))
+                .send()
+                .await
+                .wrap_err("failed to send D1 ingest request")?
+                .error_for_status()
+                .wrap_err("D1 ingest request returned error status")?
+                .json::<CloudflareResponse<ImportStatus>>()
+                .await
+                .wrap_err("failed to deserialize D1 ingest response")?;
+
+            ingest_response.ensure_success()?;
+
+            unpack_response(ingest_response)?
+        }
+        InitResult::Status(status) => {
+            info!(
+                "Skip upload for database {database_identifier}: file already uploaded; continuing import"
+            );
+            status
+        }
+    };
+
+    poll_import_until_complete(
+        &http,
+        &import_url,
+        api_token,
+        database_identifier,
+        import_status,
+    )
+    .await
+}
+
+async fn poll_import_until_complete(
+    http: &HttpClient,
+    import_url: &str,
+    api_token: &str,
+    database_identifier: &str,
+    mut status: ImportStatus,
+) -> Result<()> {
+    const MAX_ATTEMPTS: usize = 300;
+    let mut attempts = 0usize;
+    let auth_header = format!("Bearer {api_token}");
+
+    loop {
+        debug!(
+            "Import status for database {database_identifier}: success={}, status={:?}, error={:?}",
+            status.success, status.status, status.error
+        );
+
+        if !status.messages.is_empty() {
+            for message in &status.messages {
+                info!("D1 import progress for database {database_identifier}: {message}");
+            }
         }
 
-        if let Some(next) = poll_result.at_bookmark {
-            bookmark = Some(next);
+        if let Some(err) = status.error.as_deref() {
+            if err == "Not currently importing anything." {
+                info!("D1 import already complete for database {database_identifier}");
+                return Ok(());
+            }
         }
 
+        if let Some(status_text) = status.status.as_deref() {
+            let status_lower = status_text.to_ascii_lowercase();
+            if status_lower == "complete" {
+                info!("D1 import completed for database {database_identifier}");
+                return Ok(());
+            }
+
+            if status_lower.contains("fail") || status_lower.contains("error") {
+                let message = import_status_error_message(&status);
+                return Err(eyre!("D1 import failed: {message}"));
+            }
+        }
+
+        if !status.success {
+            let message = import_status_error_message(&status);
+            return Err(eyre!("D1 import failed: {message}"));
+        }
+
+        attempts += 1;
         if attempts >= MAX_ATTEMPTS {
             return Err(eyre!(
                 "Timed out after {MAX_ATTEMPTS} attempts while polling D1 import"
             ));
         }
 
+        let bookmark = status.at_bookmark.clone();
+
+        debug!(
+            "Polling D1 import for database {database_identifier}: attempt {attempts}, bookmark={bookmark:?}"
+        );
+
         sleep(Duration::from_secs(1)).await;
+
+        let poll_response: CloudflareResponse<ImportStatus> = http
+            .post(import_url)
+            .header(CONTENT_TYPE, "application/json")
+            .header(AUTHORIZATION, auth_header.as_str())
+            .json(&json!({
+                "action": "poll",
+                "current_bookmark": bookmark,
+            }))
+            .send()
+            .await
+            .wrap_err("failed to send D1 poll request")?
+            .error_for_status()
+            .wrap_err("D1 poll request returned error status")?
+            .json::<CloudflareResponse<ImportStatus>>()
+            .await
+            .wrap_err("failed to deserialize D1 poll response")?;
+
+        poll_response.ensure_success()?;
+
+        status = unpack_response(poll_response)?;
+    }
+}
+
+fn import_status_error_message(status: &ImportStatus) -> String {
+    if let Some(err) = status.error.as_ref() {
+        return err.clone();
     }
 
-    Ok(())
+    if !status.errors.is_empty() {
+        return status.errors.join(", ");
+    }
+
+    "unknown error".to_owned()
 }
 
 fn build_insert_script(entries: &[PdaSqlite]) -> Result<Option<String>> {
@@ -259,7 +305,6 @@ fn build_insert_script(entries: &[PdaSqlite]) -> Result<Option<String>> {
 
     const CHUNK_SIZE: usize = 500;
     let mut script = String::with_capacity(entries.len() * 256);
-    script.push_str("BEGIN TRANSACTION;\n");
 
     for chunk in entries.chunks(CHUNK_SIZE) {
         script.push_str(
@@ -288,8 +333,6 @@ fn build_insert_script(entries: &[PdaSqlite]) -> Result<Option<String>> {
             }
         }
     }
-
-    script.push_str("COMMIT;\n");
 
     Ok(Some(script))
 }
@@ -386,16 +429,21 @@ struct InitUploadResult {
 }
 
 #[derive(Debug, Deserialize)]
-struct IngestResult {
-    #[serde(default)]
-    at_bookmark: Option<String>,
+#[serde(untagged)]
+enum InitResult {
+    Upload(InitUploadResult),
+    Status(ImportStatus),
 }
 
 #[derive(Debug, Deserialize)]
-struct PollResult {
+struct ImportStatus {
     success: bool,
     #[serde(default)]
     error: Option<String>,
+    #[serde(default)]
+    errors: Vec<String>,
+    #[serde(default)]
+    messages: Vec<String>,
     #[serde(default)]
     status: Option<String>,
     #[serde(default)]
