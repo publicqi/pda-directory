@@ -19,11 +19,20 @@ use solana_address::Address;
 use crate::types::PdaSqlite;
 
 pub fn merge(path: PathBuf, dedup_hashset_path: PathBuf) -> Result<(Vec<PdaSqlite>, Vec<PathBuf>)> {
+    info!("Starting merge operation for path: {}", path.display());
+
     let mut dedup_hashset: HashSet<Address> = if dedup_hashset_path.exists() {
+        info!(
+            "Loading existing dedup hashset from {}",
+            dedup_hashset_path.display()
+        );
         let dedup_hashset = File::open(&dedup_hashset_path)?;
         let dedup_hashset = BufReader::new(dedup_hashset);
-        bincode::deserialize_from(dedup_hashset).unwrap_or_default()
+        let loaded: HashSet<Address> = bincode::deserialize_from(dedup_hashset).unwrap_or_default();
+        info!("Loaded dedup hashset with {} entries", loaded.len());
+        loaded
     } else {
+        info!("No existing dedup hashset found, starting fresh");
         HashSet::new()
     };
 
@@ -70,7 +79,12 @@ pub fn merge(path: PathBuf, dedup_hashset_path: PathBuf) -> Result<(Vec<PdaSqlit
         .map_err(eyre::Report::from)?;
 
     let initial_count = entries.len();
+    info!("Starting deduplication on {initial_count} entries");
+
+    info!("Sorting entries by PDA");
     entries.sort_by_key(|entry| entry.pda);
+
+    info!("Deduplicating entries within vector");
     entries.dedup_by_key(|entry| entry.pda);
     let after_vec_dedup = entries.len();
     let vec_deduped = initial_count.saturating_sub(after_vec_dedup);
@@ -83,8 +97,17 @@ pub fn merge(path: PathBuf, dedup_hashset_path: PathBuf) -> Result<(Vec<PdaSqlit
         "Deduplication stats: {vec_deduped} deduped from vec, {hashset_deduped} deduped from hashset, {after_hashset_dedup} new entries"
     );
 
+    info!("Extending dedup hashset with {} new entries", entries.len());
     dedup_hashset.extend(entries.iter().map(|entry| entry.pda));
+    info!(
+        "Dedup hashset now contains {} total entries",
+        dedup_hashset.len()
+    );
 
+    info!(
+        "Serializing dedup hashset to {}",
+        dedup_hashset_path.display()
+    );
     let temp_path = dedup_hashset_path.with_extension("tmp");
     let mut writer = BufWriter::new(File::create(&temp_path)?);
     bincode::serialize_into(&mut writer, &dedup_hashset)?;
@@ -92,10 +115,14 @@ pub fn merge(path: PathBuf, dedup_hashset_path: PathBuf) -> Result<(Vec<PdaSqlit
     writer.get_mut().sync_all()?;
 
     match std::fs::rename(&temp_path, &dedup_hashset_path) {
-        Ok(()) => {}
+        Ok(()) => {
+            info!("Successfully saved dedup hashset");
+        }
         Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
+            info!("Dedup hashset already exists, replacing it");
             std::fs::remove_file(&dedup_hashset_path)?;
             std::fs::rename(&temp_path, &dedup_hashset_path)?;
+            info!("Successfully replaced dedup hashset");
         }
         Err(err) => {
             std::fs::remove_file(&temp_path).ok();
@@ -106,6 +133,11 @@ pub fn merge(path: PathBuf, dedup_hashset_path: PathBuf) -> Result<(Vec<PdaSqlit
         }
     }
 
+    info!(
+        "Merge operation completed: returning {} entries and {} blob files",
+        entries.len(),
+        blob_files.len()
+    );
     Ok((entries, blob_files))
 }
 
@@ -117,6 +149,10 @@ fn process_paths(
     total_sources: usize,
     parser: fn(&Path) -> Result<Vec<PdaSqlite>>,
 ) -> Result<()> {
+    info!(
+        "Starting parallel processing of {} {label} file(s)",
+        paths.len()
+    );
     paths.par_iter().try_for_each(|path| -> Result<()> {
         let parsed = parser(path.as_path())
             .wrap_err_with(|| format!("failed to parse {label} file {}", path.display()))?;
@@ -140,6 +176,7 @@ fn process_paths(
 }
 
 fn collect_blob_files(root: &Path) -> Result<Vec<PathBuf>> {
+    info!("Scanning for blob files in {}", root.display());
     let now = SystemTime::now();
     let mut files = Vec::new();
 
@@ -167,14 +204,18 @@ fn collect_blob_files(root: &Path) -> Result<Vec<PathBuf>> {
             let age = now.duration_since(metadata.modified()?).unwrap_or_default();
             if age > Duration::from_secs(5) {
                 files.push(path);
+            } else {
+                info!("Skipping blob file {filename} (age: {age:?}, needs > 5s)");
             }
         }
     }
 
+    info!("Found {} eligible blob file(s)", files.len());
     Ok(files)
 }
 
 fn collect_sqlite_files(root: &Path) -> Result<Vec<PathBuf>> {
+    info!("Scanning for sqlite files in {}", root.display());
     let mut files = Vec::new();
 
     for entry in std::fs::read_dir(root)? {
@@ -189,20 +230,30 @@ fn collect_sqlite_files(root: &Path) -> Result<Vec<PathBuf>> {
         }
     }
 
+    info!("Found {} sqlite file(s)", files.len());
     Ok(files)
 }
 
 fn from_blob(path: &Path) -> Result<Vec<PdaSqlite>> {
+    info!("Deserializing blob file: {}", path.display());
     let file = File::open(path)
         .wrap_err_with(|| format!("failed to open blob file {}", path.display()))?;
     let reader = BufReader::new(file);
-    bincode::deserialize_from(reader)
-        .map_err(|err| eyre!("failed to deserialize blob file {}: {err}", path.display()))
+    let entries: Vec<PdaSqlite> = bincode::deserialize_from(reader)
+        .map_err(|err| eyre!("failed to deserialize blob file {}: {err}", path.display()))?;
+    info!(
+        "Deserialized {} entries from blob file: {}",
+        entries.len(),
+        path.display()
+    );
+    Ok(entries)
 }
 
 fn from_sqlite(path: &Path) -> Result<Vec<PdaSqlite>> {
+    info!("Opening sqlite file: {}", path.display());
     let conn = rusqlite::Connection::open(path)
         .wrap_err_with(|| format!("failed to open sqlite file {}", path.display()))?;
+    info!("Preparing query for sqlite file: {}", path.display());
     let mut stmt = conn
         .prepare("SELECT pda, program_id, seed_bytes FROM pda_registry")
         .wrap_err_with(|| format!("failed to prepare statement for {}", path.display()))?;
@@ -219,27 +270,7 @@ fn from_sqlite(path: &Path) -> Result<Vec<PdaSqlite>> {
         let pda_bytes: Vec<u8> = row.get(0)?;
         let program_id_bytes: Vec<u8> = row.get(1)?;
         let seed_bytes: Vec<u8> = row.get(2)?;
-
-        let seeds_raw: Vec<u8> = bincode::deserialize(&seed_bytes).map_err(|err| {
-            eyre!(
-                "failed to deserialize seeds blob in {}: {err}",
-                path.display()
-            )
-        })?;
-
-        #[allow(unused)]
-        fn encode_seeds_for_storage(seeds: &[Vec<u8>]) -> Vec<u8> {
-            let total_seed_bytes = seeds.iter().map(|seed| seed.len()).sum::<usize>();
-            let mut encoded = Vec::with_capacity(
-                total_seed_bytes + (seeds.len() + 1) * std::mem::size_of::<u32>(),
-            );
-            encoded.extend_from_slice(&(seeds.len() as u32).to_le_bytes());
-            for seed in seeds {
-                encoded.extend_from_slice(&(seed.len() as u32).to_le_bytes());
-                encoded.extend_from_slice(seed);
-            }
-            encoded
-        }
+        let seeds: Vec<Vec<u8>> = decode_seeds_from_storage(seed_bytes);
 
         fn decode_seeds_from_storage(seeds_raw: Vec<u8>) -> Vec<Vec<u8>> {
             let mut cursor = 0;
@@ -284,8 +315,6 @@ fn from_sqlite(path: &Path) -> Result<Vec<PdaSqlite>> {
             seeds
         }
 
-        let seeds = decode_seeds_from_storage(seeds_raw);
-
         entries.push(PdaSqlite {
             pda: decode_address(pda_bytes, "pda", path)?,
             program_id: decode_address(program_id_bytes, "program_id", path)?,
@@ -293,6 +322,11 @@ fn from_sqlite(path: &Path) -> Result<Vec<PdaSqlite>> {
         });
     }
 
+    info!(
+        "Extracted {} entries from sqlite file: {}",
+        entries.len(),
+        path.display()
+    );
     Ok(entries)
 }
 
