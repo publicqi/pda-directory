@@ -1,4 +1,4 @@
 set dotenv-load
 
 run path:
-    RUST_LOG=info cargo run -r -- --path {{path}} --token $CLOUDFLARE_TOKEN --account-id $CLOUDFLARE_ACCOUNT_ID
+    RUST_LOG=info,uploader::cloudflare=debug cargo run -r -- --path {{path}} --token $CLOUDFLARE_TOKEN --account-id $CLOUDFLARE_ACCOUNT_ID
