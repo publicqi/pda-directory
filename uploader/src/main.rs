@@ -54,7 +54,7 @@ async fn main() {
             other => panic!("unexpected active db: {other}"),
         };
 
-        const CHUNK_SIZE: usize = 1000;
+        const CHUNK_SIZE: usize = 250_000;
         let total_entries = entries.len();
         let num_chunks = total_entries.div_ceil(CHUNK_SIZE);
 
