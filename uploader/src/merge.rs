@@ -1,10 +1,10 @@
-use eyre::Result;
-use log::info;
-use rayon::iter::{IntoParallelIterator, ParallelIterator};
+use eyre::{Result, WrapErr, eyre};
+use log::{info, warn};
+use rayon::prelude::*;
 use std::{
     collections::HashSet,
     fs::File,
-    io::{BufReader, BufWriter},
+    io::{BufReader, BufWriter, Write},
     path::PathBuf,
     sync::{
         Arc, RwLock,
@@ -17,9 +17,9 @@ use solana_address::Address;
 
 use crate::types::PdaSqlite;
 
-pub fn merge(path: PathBuf, dedup_hashset_file: PathBuf) -> Result<(Vec<PdaSqlite>, Vec<PathBuf>)> {
-    let mut dedup_hashset: HashSet<Address> = if dedup_hashset_file.exists() {
-        let dedup_hashset = File::open(&dedup_hashset_file)?;
+pub fn merge(path: PathBuf, dedup_hashset_path: PathBuf) -> Result<(Vec<PdaSqlite>, Vec<PathBuf>)> {
+    let mut dedup_hashset: HashSet<Address> = if dedup_hashset_path.exists() {
+        let dedup_hashset = File::open(&dedup_hashset_path)?;
         let dedup_hashset = BufReader::new(dedup_hashset);
         bincode::deserialize_from(dedup_hashset).unwrap_or_default()
     } else {
@@ -35,23 +35,32 @@ pub fn merge(path: PathBuf, dedup_hashset_file: PathBuf) -> Result<(Vec<PdaSqlit
 
     info!("Starting deserialization of {total_files} files");
 
-    files.clone().into_par_iter().for_each(|file| {
-        let pda_sqlite = deserialize_pda_sqlite(&file).unwrap_or_else(|err| {
-            eprintln!("Failed to deserialize file {file:?}: {err}");
-            panic!("Failed to deserialize pda sqlite");
-        });
+    files.par_iter().try_for_each(|file| -> Result<()> {
+        let pda_sqlite = deserialize_pda_sqlite(file)
+            .wrap_err_with(|| format!("failed to deserialize file {}", file.display()))?;
 
-        rw_entries.write().unwrap().extend(pda_sqlite);
+        let current_len = {
+            let mut entries = rw_entries
+                .write()
+                .map_err(|err| eyre!("rw_entries poisoned: {err}"))?;
+            entries.extend(pda_sqlite);
+            entries.len()
+        };
+
         let processed = num_files_dealt.fetch_add(1, atomic::Ordering::Relaxed) + 1;
         info!(
             "Finished deserializing file ({processed}/{total_files}) {} entries so far",
-            rw_entries.read().unwrap().len()
+            current_len
         );
-    });
+
+        Ok(())
+    })?;
 
     // deduplicate entries
     {
-        let mut entries = rw_entries.write().unwrap();
+        let mut entries = rw_entries
+            .write()
+            .map_err(|err| eyre!("rw_entries poisoned: {err}"))?;
         let initial_count = entries.len();
 
         entries.sort_by_key(|entry| entry.pda);
@@ -69,9 +78,26 @@ pub fn merge(path: PathBuf, dedup_hashset_file: PathBuf) -> Result<(Vec<PdaSqlit
 
         dedup_hashset.extend(entries.iter().map(|entry| entry.pda));
 
-        let dedup_hashset_file = File::create(dedup_hashset_file)?;
-        let dedup_hashset_file = BufWriter::new(dedup_hashset_file);
-        bincode::serialize_into(dedup_hashset_file, &dedup_hashset)?;
+        let temp_path = dedup_hashset_path.with_extension("tmp");
+        let mut writer = BufWriter::new(File::create(&temp_path)?);
+        bincode::serialize_into(&mut writer, &dedup_hashset)?;
+        writer.flush()?;
+        writer.get_mut().sync_all()?;
+
+        match std::fs::rename(&temp_path, &dedup_hashset_path) {
+            Ok(()) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
+                std::fs::remove_file(&dedup_hashset_path)?;
+                std::fs::rename(&temp_path, &dedup_hashset_path)?;
+            }
+            Err(err) => {
+                std::fs::remove_file(&temp_path).ok();
+                return Err(eyre!(
+                    "failed to replace dedup hashset at {}: {err}",
+                    dedup_hashset_path.display()
+                ));
+            }
+        }
     }
 
     let entries = Arc::try_unwrap(rw_entries)
@@ -90,7 +116,22 @@ fn all_valid_files(root: &PathBuf) -> Result<Vec<PathBuf>> {
     for entry in std::fs::read_dir(root)? {
         let entry = entry?;
         let path = entry.path();
-        let filename = path.file_name().unwrap().to_str().unwrap();
+        let Some(filename_os) = path.file_name() else {
+            warn!(
+                "Skipping path without filename while scanning {}",
+                path.display()
+            );
+            continue;
+        };
+
+        let Some(filename) = filename_os.to_str() else {
+            warn!(
+                "Skipping non-UTF-8 filename while scanning {}",
+                path.display()
+            );
+            continue;
+        };
+
         if filename.starts_with("pda_collector_") && filename.ends_with(".blob") {
             let metadata = entry.metadata()?;
             let age = now.duration_since(metadata.modified()?).unwrap_or_default();

@@ -108,23 +108,26 @@ pub async fn upload_to_d1(
         "https://api.cloudflare.com/client/v4/accounts/{account_identifier}/d1/database/{database_identifier}/import"
     );
 
-    let init_result: InitUploadResult = unpack_response(
-        http.post(&import_url)
-            .header(CONTENT_TYPE, "application/json")
-            .header(AUTHORIZATION, format!("Bearer {api_token}"))
-            .json(&json!({
-                "action": "init",
-                "etag": checksum,
-            }))
-            .send()
-            .await
-            .wrap_err("failed to send D1 init request")?
-            .error_for_status()
-            .wrap_err("D1 init request returned error status")?
-            .json::<CloudflareResponse<InitUploadResult>>()
-            .await
-            .wrap_err("failed to deserialize D1 init response")?,
-    )?;
+    let init_response: CloudflareResponse<InitUploadResult> = http
+        .post(&import_url)
+        .header(CONTENT_TYPE, "application/json")
+        .header(AUTHORIZATION, format!("Bearer {api_token}"))
+        .json(&json!({
+            "action": "init",
+            "etag": checksum,
+        }))
+        .send()
+        .await
+        .wrap_err("failed to send D1 init request")?
+        .error_for_status()
+        .wrap_err("D1 init request returned error status")?
+        .json::<CloudflareResponse<InitUploadResult>>()
+        .await
+        .wrap_err("failed to deserialize D1 init response")?;
+
+    init_response.ensure_success()?;
+
+    let init_result: InitUploadResult = unpack_response(init_response)?;
 
     debug!(
         "Received upload URL {} and filename {}",
@@ -155,24 +158,27 @@ pub async fn upload_to_d1(
 
     debug!("Verified upload etag {response_etag}");
 
-    let ingest_result: IngestResult = unpack_response(
-        http.post(&import_url)
-            .header(CONTENT_TYPE, "application/json")
-            .header(AUTHORIZATION, format!("Bearer {api_token}"))
-            .json(&json!({
-                "action": "ingest",
-                "etag": checksum,
-                "filename": init_result.filename,
-            }))
-            .send()
-            .await
-            .wrap_err("failed to send D1 ingest request")?
-            .error_for_status()
-            .wrap_err("D1 ingest request returned error status")?
-            .json::<CloudflareResponse<IngestResult>>()
-            .await
-            .wrap_err("failed to deserialize D1 ingest response")?,
-    )?;
+    let ingest_response: CloudflareResponse<IngestResult> = http
+        .post(&import_url)
+        .header(CONTENT_TYPE, "application/json")
+        .header(AUTHORIZATION, format!("Bearer {api_token}"))
+        .json(&json!({
+            "action": "ingest",
+            "etag": checksum,
+            "filename": init_result.filename,
+        }))
+        .send()
+        .await
+        .wrap_err("failed to send D1 ingest request")?
+        .error_for_status()
+        .wrap_err("D1 ingest request returned error status")?
+        .json::<CloudflareResponse<IngestResult>>()
+        .await
+        .wrap_err("failed to deserialize D1 ingest response")?;
+
+    ingest_response.ensure_success()?;
+
+    let ingest_result: IngestResult = unpack_response(ingest_response)?;
 
     let mut bookmark = ingest_result.at_bookmark;
     let mut attempts = 0usize;
@@ -181,23 +187,26 @@ pub async fn upload_to_d1(
     loop {
         attempts += 1;
         let current_bookmark = bookmark.clone();
-        let poll_result: PollResult = unpack_response(
-            http.post(&import_url)
-                .header(CONTENT_TYPE, "application/json")
-                .header(AUTHORIZATION, format!("Bearer {api_token}"))
-                .json(&json!({
-                    "action": "poll",
-                    "current_bookmark": current_bookmark,
-                }))
-                .send()
-                .await
-                .wrap_err("failed to send D1 poll request")?
-                .error_for_status()
-                .wrap_err("D1 poll request returned error status")?
-                .json::<CloudflareResponse<PollResult>>()
-                .await
-                .wrap_err("failed to deserialize D1 poll response")?,
-        )?;
+        let poll_response: CloudflareResponse<PollResult> = http
+            .post(&import_url)
+            .header(CONTENT_TYPE, "application/json")
+            .header(AUTHORIZATION, format!("Bearer {api_token}"))
+            .json(&json!({
+                "action": "poll",
+                "current_bookmark": current_bookmark,
+            }))
+            .send()
+            .await
+            .wrap_err("failed to send D1 poll request")?
+            .error_for_status()
+            .wrap_err("D1 poll request returned error status")?
+            .json::<CloudflareResponse<PollResult>>()
+            .await
+            .wrap_err("failed to deserialize D1 poll response")?;
+
+        poll_response.ensure_success()?;
+
+        let poll_result: PollResult = unpack_response(poll_response)?;
 
         debug!(
             "Poll attempt {attempts}: success={}, error={:?}, status={:?}",
@@ -213,6 +222,17 @@ pub async fn upload_to_d1(
             if err == "Not currently importing anything." {
                 info!("D1 import already complete for database {database_identifier}");
                 break;
+            }
+
+            return Err(eyre!("D1 import failed: {err}"));
+        }
+
+        if let Some(status) = poll_result.status.as_deref() {
+            let status_lower = status.to_ascii_lowercase();
+            if status_lower.contains("fail") || status_lower.contains("error") {
+                return Err(eyre!(
+                    "D1 import reported failure status '{status}' for database {database_identifier}"
+                ));
             }
         }
 
@@ -289,17 +309,33 @@ fn to_blob_literal(bytes: &[u8]) -> String {
     literal
 }
 
-fn unpack_response<T>(response: CloudflareResponse<T>) -> Result<T> {
-    if response.success {
-        Ok(response.result)
-    } else {
-        let mut message = response
+fn unpack_response<T>(response: CloudflareResponse<T>) -> Result<T>
+where
+    T: std::fmt::Debug,
+{
+    response.into_result()
+}
+
+#[derive(Debug, Deserialize)]
+struct CloudflareResponse<T> {
+    #[serde(default = "none")]
+    result: Option<T>,
+    success: bool,
+    #[serde(default)]
+    errors: Vec<CloudflareApiError>,
+}
+
+impl<T> CloudflareResponse<T>
+where
+    T: std::fmt::Debug,
+{
+    fn error_message(&self) -> String {
+        let mut message = self
             .errors
-            .unwrap_or_default()
-            .into_iter()
-            .map(|err| match (err.code, err.message) {
+            .iter()
+            .map(|err| match (err.code, err.message.as_str()) {
                 (Some(code), msg) => format!("{code}: {msg}"),
-                (None, msg) => msg,
+                (None, msg) => msg.to_owned(),
             })
             .collect::<Vec<_>>()
             .join(", ");
@@ -308,16 +344,33 @@ fn unpack_response<T>(response: CloudflareResponse<T>) -> Result<T> {
             message = "unknown error".to_owned();
         }
 
-        Err(eyre!("Cloudflare API error: {message}"))
+        if let Some(payload) = self.result.as_ref() {
+            message = format!("{message}; payload: {:?}", payload);
+        }
+
+        message
+    }
+
+    fn ensure_success(&self) -> Result<()> {
+        if self.success {
+            return Ok(());
+        }
+
+        Err(eyre!("Cloudflare API error: {}", self.error_message()))
+    }
+
+    fn into_result(self) -> Result<T> {
+        if self.success {
+            self.result
+                .ok_or_else(|| eyre!("Cloudflare API response missing result payload"))
+        } else {
+            Err(eyre!("Cloudflare API error: {}", self.error_message()))
+        }
     }
 }
 
-#[derive(Debug, Deserialize)]
-struct CloudflareResponse<T> {
-    result: T,
-    success: bool,
-    #[serde(default)]
-    errors: Option<Vec<CloudflareApiError>>,
+fn none<T>() -> Option<T> {
+    None
 }
 
 #[derive(Debug, Deserialize)]

@@ -1,6 +1,6 @@
 use ::cloudflare::framework::auth::Credentials;
 use clap::Parser;
-use log::info;
+use log::{info, warn};
 
 use crate::{
     cloudflare::{get_kv, new_client, put_kv, upload_to_d1},
@@ -79,6 +79,8 @@ async fn main() {
 
     // remove old files
     for file in files {
-        std::fs::remove_file(file).unwrap();
+        if let Err(err) = std::fs::remove_file(&file) {
+            warn!("Failed to remove source blob {}: {err}", file.display());
+        }
     }
 }
