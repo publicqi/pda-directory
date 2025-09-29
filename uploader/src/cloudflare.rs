@@ -303,7 +303,7 @@ fn build_insert_script(entries: &[PdaSqlite]) -> Result<Option<String>> {
         return Ok(None);
     }
 
-    const CHUNK_SIZE: usize = 250;
+    const CHUNK_SIZE: usize = 10;
     let mut script = String::with_capacity(entries.len() * 256);
 
     for chunk in entries.chunks(CHUNK_SIZE) {
