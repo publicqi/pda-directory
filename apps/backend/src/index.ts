@@ -310,6 +310,15 @@ export const createApp = (): Hono<Env> => {
 
   app.get('/api/healthz', (c) => c.json({ status: 'ok' }));
 
+  app.get('/api/announcement', (c) => {
+    // Return announcement message if there's one to display
+    const announcement = {
+      message: 'Current website waiting for refactoring. Will be back this weekend',
+      enabled: true,
+    };
+    return c.json(announcement);
+  });
+
   /*
   // NOTE: In uploader use wrangler to toggle the database
 
